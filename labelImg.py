@@ -825,11 +825,24 @@ class MainWindow(QMainWindow, WindowMixin):
         if shape is None:
             # print('rm empty label')
             return
-        item = self.shapes_to_items[shape]
+        item = self.shapes_to_items.get(shape)
+        if item is None:
+            return
         self.label_list.takeItem(self.label_list.row(item))
         del self.shapes_to_items[shape]
         del self.items_to_shapes[item]
         self.update_combo_box()
+
+    def _validate_label_list(self):
+        """检查标签列表：若列表项的 shape 已不存在于 canvas 中，标记为红色提示"""
+        shapes = self.canvas.shapes
+        for i in range(self.label_list.count()):
+            item = self.label_list.item(i)
+            shape = self.items_to_shapes.get(item)
+            if shape is None or shape not in shapes:
+                item.setForeground(QColor(Qt.red))
+            else:
+                item.setForeground(QColor(Qt.black))
 
     def load_labels(self, shapes):
         s = []
@@ -860,6 +873,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.add_label(shape)
         self.update_combo_box()
         self.canvas.load_shapes(s)
+        self._validate_label_list()
 
     def update_combo_box(self):
         # Get the unique labels and add them to the Combobox.
@@ -1569,6 +1583,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def delete_selected_shape(self):
         self.remove_label(self.canvas.delete_selected())
+        self._validate_label_list()
         self.set_dirty()
         if self.no_shapes():
             for action in self.actions.onShapesPresent:

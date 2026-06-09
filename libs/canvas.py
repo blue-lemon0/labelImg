@@ -11,10 +11,10 @@ from libs.utils import distance
 # Decouples physical keys from logical actions.
 # Future: load from user config file.
 KEY_BINDINGS = {
-    (Qt.Key_C, Qt.NoModifier):   'corner_cw',
-    (Qt.Key_X, Qt.NoModifier):   'corner_ccw',
-    (Qt.Key_Z, Qt.NoModifier):   'shape_next',
-    (Qt.Key_Z, Qt.ShiftModifier): 'shape_prev',
+    (Qt.Key_C, Qt.NoModifier):    'corner_cw',
+    (Qt.Key_Z, Qt.NoModifier):    'corner_ccw',
+    (Qt.Key_X, Qt.NoModifier):    'shape_next',
+    (Qt.Key_X, Qt.ShiftModifier): 'shape_prev',
 }
 
 CURSOR_DEFAULT = Qt.ArrowCursor

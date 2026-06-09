@@ -20,7 +20,7 @@ from libs.utils import *
 from libs.settings import Settings
 from libs.shape import Shape, DEFAULT_LINE_COLOR, DEFAULT_FILL_COLOR
 from libs.stringBundle import StringBundle
-from libs.canvas import Canvas
+from libs.canvas import Canvas, KEY_BINDINGS
 from libs.zoomWidget import ZoomWidget
 from libs.lightWidget import LightWidget
 from libs.labelDialog import LabelDialog
@@ -90,6 +90,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Whether we need to save or not.
         self.dirty = False
+        self._paste_undo_stack = []
 
         self._no_selection_slot = False
         self._beginner = True
@@ -230,6 +231,7 @@ class MainWindow(QMainWindow, WindowMixin):
         open_annotation = action(get_str('openAnnotation'), self.open_annotation_dialog,
                                  'Ctrl+Shift+O', 'open', get_str('openAnnotationDetail'))
         copy_prev_bounding = action(get_str('copyPrevBounding'), self.copy_previous_bounding_boxes, 'Ctrl+v', 'copy', get_str('copyPrevBounding'))
+        undo_paste = action('撤销粘贴', self._undo_paste, 'Ctrl+Z', 'undo', '撤销上一次 Ctrl+V 粘贴')
 
         open_next_image = action(get_str('nextImg'), self.open_next_image,
                                  'd', 'next', get_str('nextImgDetail'))
@@ -382,7 +384,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Store actions for further handling.
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
-                              lineColor=color1, create=create, delete=delete, edit=edit, copy=copy,
+                              lineColor=color1, create=create, delete=delete, edit=edit, copy=copy, undoPaste=undo_paste,
                               createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode,
                               shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
                               zoom=zoom, zoomIn=zoom_in, zoomOut=zoom_out, zoomOrg=zoom_org,
@@ -393,7 +395,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               fileMenuActions=(
                                   open, open_dir, save, save_as, close, reset_all, quit),
                               beginner=(), advanced=(),
-                              editMenu=(edit, copy, delete,
+                              editMenu=(undo_paste, edit, copy, delete,
                                         None, color1, self.draw_squares_option),
                               beginnerContext=(create, edit, copy, delete),
                               advancedContext=(create_mode, edit_mode, edit, copy,
@@ -535,6 +537,9 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.file_path and os.path.isdir(self.file_path):
             self.open_dir_dialog(dir_path=self.file_path, silent=True)
 
+        # Global event filter: intercept custom keybindings before child widgets consume them
+        self.installEventFilter(self)
+
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Control:
             self.canvas.set_drawing_shape_to_square(False)
@@ -543,6 +548,20 @@ class MainWindow(QMainWindow, WindowMixin):
         if event.key() == Qt.Key_Control:
             # Draw rectangle if Ctrl is pressed
             self.canvas.set_drawing_shape_to_square(True)
+
+    def eventFilter(self, obj, event):
+        """Intercept keybindings before child widgets (e.g. QListWidget) consume them.
+        
+        Uses the same KEY_BINDINGS table as Canvas.keyPressEvent,
+        so keys stay decoupled from logic.
+        """
+        if event.type() == QEvent.KeyPress:
+            shift = event.modifiers() & Qt.ShiftModifier
+            action = KEY_BINDINGS.get((event.key(), shift))
+            if action is not None:
+                self.canvas.execute_action(action, event)
+                return True  # Eat the event — prevent child widget from getting it
+        return super().eventFilter(obj, event)
 
     # Support Functions #
     def set_format(self, save_format):
@@ -844,7 +863,7 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 item.setForeground(QColor(Qt.black))
 
-    def load_labels(self, shapes):
+    def load_labels(self, shapes, replace=True):
         s = []
         for label, points, line_color, fill_color, difficult in shapes:
             shape = Shape(label=label)
@@ -872,7 +891,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
             self.add_label(shape)
         self.update_combo_box()
-        self.canvas.load_shapes(s)
+        if replace:
+            self.canvas.load_shapes(s)
+        else:
+            self.canvas.shapes.extend(s)
         self._validate_label_list()
 
     def update_combo_box(self):
@@ -1187,7 +1209,7 @@ class MainWindow(QMainWindow, WindowMixin):
         """
         return '[{} / {}]'.format(self.cur_img_idx + 1, self.img_count)
 
-    def show_bounding_box_from_annotation_file(self, file_path):
+    def show_bounding_box_from_annotation_file(self, file_path, replace=True):
         if self.default_save_dir is not None:
             basename = os.path.basename(os.path.splitext(file_path)[0])
             xml_path = os.path.join(self.default_save_dir, basename + XML_EXT)
@@ -1198,11 +1220,11 @@ class MainWindow(QMainWindow, WindowMixin):
             PascalXML > YOLO
             """
             if os.path.isfile(xml_path):
-                self.load_pascal_xml_by_filename(xml_path)
+                self.load_pascal_xml_by_filename(xml_path, replace=replace)
             elif os.path.isfile(txt_path):
-                self.load_yolo_txt_by_filename(txt_path)
+                self.load_yolo_txt_by_filename(txt_path, replace=replace)
             elif os.path.isfile(json_path):
-                self.load_create_ml_json_by_filename(json_path, file_path)
+                self.load_create_ml_json_by_filename(json_path, file_path, replace=replace)
 
         else:
             xml_path = os.path.splitext(file_path)[0] + XML_EXT
@@ -1210,11 +1232,11 @@ class MainWindow(QMainWindow, WindowMixin):
             json_path = os.path.splitext(file_path)[0] + JSON_EXT
 
             if os.path.isfile(xml_path):
-                self.load_pascal_xml_by_filename(xml_path)
+                self.load_pascal_xml_by_filename(xml_path, replace=replace)
             elif os.path.isfile(txt_path):
-                self.load_yolo_txt_by_filename(txt_path)
+                self.load_yolo_txt_by_filename(txt_path, replace=replace)
             elif os.path.isfile(json_path):
-                self.load_create_ml_json_by_filename(json_path, file_path)
+                self.load_create_ml_json_by_filename(json_path, file_path, replace=replace)
             
 
     def resizeEvent(self, event):
@@ -1316,7 +1338,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if dir_path is not None and len(dir_path) > 1:
             self.default_save_dir = dir_path
 
-        self.show_bounding_box_from_annotation_file(self.file_path)
+        if self.file_path is not None:
+            self.show_bounding_box_from_annotation_file(self.file_path)
 
         self.statusBar().showMessage('%s . Annotation will be saved to %s' %
                                      ('Change saved folder', self.default_save_dir))
@@ -1627,7 +1650,7 @@ class MainWindow(QMainWindow, WindowMixin):
                     else:
                         self.label_hist.append(line)
 
-    def load_pascal_xml_by_filename(self, xml_path):
+    def load_pascal_xml_by_filename(self, xml_path, replace=True):
         if self.file_path is None:
             return
         if os.path.isfile(xml_path) is False:
@@ -1637,10 +1660,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         t_voc_parse_reader = PascalVocReader(xml_path)
         shapes = t_voc_parse_reader.get_shapes()
-        self.load_labels(shapes)
+        self.load_labels(shapes, replace=replace)
         self.canvas.verified = t_voc_parse_reader.verified
 
-    def load_yolo_txt_by_filename(self, txt_path):
+    def load_yolo_txt_by_filename(self, txt_path, replace=True):
         if self.file_path is None:
             return
         if os.path.isfile(txt_path) is False:
@@ -1650,10 +1673,10 @@ class MainWindow(QMainWindow, WindowMixin):
         t_yolo_parse_reader = YoloReader(txt_path, self.image)
         shapes = t_yolo_parse_reader.get_shapes()
         print(shapes)
-        self.load_labels(shapes)
+        self.load_labels(shapes, replace=replace)
         self.canvas.verified = t_yolo_parse_reader.verified
 
-    def load_create_ml_json_by_filename(self, json_path, file_path):
+    def load_create_ml_json_by_filename(self, json_path, file_path, replace=True):
         if self.file_path is None:
             return
         if os.path.isfile(json_path) is False:
@@ -1663,15 +1686,38 @@ class MainWindow(QMainWindow, WindowMixin):
 
         create_ml_parse_reader = CreateMLReader(json_path, file_path)
         shapes = create_ml_parse_reader.get_shapes()
-        self.load_labels(shapes)
+        self.load_labels(shapes, replace=replace)
         self.canvas.verified = create_ml_parse_reader.verified
 
     def copy_previous_bounding_boxes(self):
         current_index = self.m_img_list.index(self.file_path)
         if current_index - 1 >= 0:
+            self._paste_undo_stack.append(self._snapshot_shapes())
             prev_file_path = self.m_img_list[current_index - 1]
-            self.show_bounding_box_from_annotation_file(prev_file_path)
+            self.show_bounding_box_from_annotation_file(prev_file_path, replace=False)
             self.save_file()
+
+    def _snapshot_shapes(self):
+        """返回当前所有 shape 的可序列化快照，用于粘贴撤销"""
+        return [
+            (shape.label, [(p.x(), p.y()) for p in shape.points],
+             shape.line_color.getRgb() if shape.line_color else None,
+             shape.fill_color.getRgb() if shape.fill_color else None,
+             shape.difficult)
+            for shape in self.canvas.shapes
+        ]
+
+    def _undo_paste(self):
+        """Ctrl+Z: 撤销上一次 Ctrl+V 粘贴"""
+        if not self._paste_undo_stack:
+            return
+        saved = self._paste_undo_stack.pop()
+        self.label_list.clear()
+        self.items_to_shapes.clear()
+        self.shapes_to_items.clear()
+        self.canvas.shapes.clear()
+        self.load_labels(saved, replace=True)
+        self.canvas.repaint()
 
     def toggle_paint_labels_option(self):
         for shape in self.canvas.shapes:

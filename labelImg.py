@@ -14,7 +14,6 @@ from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 
 from libs.combobox import ComboBox
-from libs.default_label_combobox import DefaultLabelComboBox
 from libs.resources import *
 from libs.constants import *
 from libs.utils import *
@@ -117,17 +116,21 @@ class MainWindow(QMainWindow, WindowMixin):
         # Create a widget for using default label
         self.use_default_label_checkbox = QCheckBox(get_str('useDefaultLabel'))
         self.use_default_label_checkbox.setChecked(False)
-        self.default_label_combo_box = DefaultLabelComboBox(self,items=self.label_hist)
+        self.default_label_text_line = QLineEdit()
+        self.default_label_text_line.setText(self.default_label if self.label_hist else "")
+        self.default_label_text_line.textChanged.connect(self._update_default_label)
 
         use_default_label_qhbox_layout = QHBoxLayout()
+        use_default_label_qhbox_layout.setContentsMargins(0, 0, 0, 0)
         use_default_label_qhbox_layout.addWidget(self.use_default_label_checkbox)
-        use_default_label_qhbox_layout.addWidget(self.default_label_combo_box)
+        use_default_label_qhbox_layout.addWidget(self.default_label_text_line)
         use_default_label_container = QWidget()
         use_default_label_container.setLayout(use_default_label_qhbox_layout)
 
         # Create a widget for edit and diffc button
         self.diffc_button = QCheckBox(get_str('useDifficult'))
         self.diffc_button.setChecked(False)
+        self.diffc_button.setToolTip("勾选后，当前选中的框标记为「难以辨认」\n评估模型时可选择排除此类样本（Pascal VOC difficult 标准）")
         self.diffc_button.stateChanged.connect(self.button_state)
         self.edit_button = QToolButton()
         self.edit_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -139,7 +142,16 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # Create and add combobox for showing unique labels in group
         self.combo_box = ComboBox(self)
-        list_layout.addWidget(self.combo_box)
+        combo_layout = QHBoxLayout()
+        combo_layout.setContentsMargins(0, 0, 0, 0)
+        combo_layout.setSpacing(3)
+        combo_label = QLabel("标签筛选")
+        combo_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        combo_layout.addWidget(combo_label)
+        combo_layout.addWidget(self.combo_box)
+        combo_container = QWidget()
+        combo_container.setLayout(combo_layout)
+        list_layout.addWidget(combo_container)
 
         # Create and add a widget for showing current label items
         self.label_list = QListWidget()
@@ -916,8 +928,8 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 self.label_list.item(i).setCheckState(2)
 
-    def default_label_combo_selection_changed(self, index):
-        self.default_label=self.label_hist[index]
+    def _update_default_label(self, text):
+        self.default_label = text
 
     def label_selection_changed(self):
         item = self.current_item()
@@ -944,7 +956,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         position MUST be in global coordinates.
         """
-        if not self.use_default_label_checkbox.isChecked():
+        if not self.use_default_label_checkbox.isChecked() or not self.default_label_text_line.text():
             if len(self.label_hist) > 0:
                 self.label_dialog = LabelDialog(
                     parent=self, list_item=self.label_hist)
@@ -956,7 +968,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 text = self.label_dialog.pop_up(text=self.prev_label_text)
                 self.lastLabel = text
         else:
-            text = self.default_label
+            text = self.default_label_text_line.text()
 
         # Add Chris
         self.diffc_button.setChecked(False)

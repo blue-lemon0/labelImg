@@ -60,6 +60,65 @@ class WindowMixin(object):
         return toolbar
 
 
+class StatusManager:
+    """Manages status bar messages with auto-restore of default message.
+    
+    - set_default() stores the default message (e.g. save dir path)
+    - show() shows a message, optionally auto-restoring default after a delay
+    - No blank gaps: restoration is timer-driven, not dependent on showMessage timeout
+    """
+
+    def __init__(self, status_bar):
+        self._bar = status_bar
+        self._default = ''
+        self._timer = QTimer()
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._restore_default)
+
+        # Intercept ALL message changes: if anything clears the bar, restore default
+        self._bar.messageChanged.connect(self._on_message_changed)
+
+    def set_default(self, text):
+        """Set the default message. Shows immediately if no active temp message."""
+        self._default = text
+        if not self._timer.isActive():
+            self._restore_default()
+
+    def clear_default(self):
+        """Clear the default message."""
+        self._default = ''
+        if not self._timer.isActive():
+            self._bar.clearMessage()
+
+    def show(self, text, delay=0):
+        """Show a message. If delay > 0, restore default after delay ms.
+        
+        Args:
+            text: Message to display
+            delay: If > 0, auto-restore default after this many ms.
+                   If 0, message stays until next show() or set_default() call.
+        """
+        self._timer.stop()
+        self._bar.showMessage(text)
+        if delay > 0:
+            self._timer.start(delay)
+
+    def _restore_default(self):
+        if self._default:
+            self._bar.showMessage(self._default)
+        else:
+            self._bar.clearMessage()
+
+    def _on_message_changed(self, text):
+        """Called whenever the status bar message changes.
+        
+        If the bar goes blank and we have a default, restore it.
+        This catches ALL clearMessage/showMessage('') calls from any source.
+        """
+        if not text and self._default:
+            self._bar.showMessage(self._default)
+
+
 class MainWindow(QMainWindow, WindowMixin):
     FIT_WINDOW, FIT_WIDTH, MANUAL_ZOOM = list(range(3))
 
@@ -469,8 +528,8 @@ class MainWindow(QMainWindow, WindowMixin):
             create_mode, edit_mode, None,
             hide_all, show_all)
 
-        self.statusBar().showMessage('%s started.' % __appname__)
-        self.statusBar().show()
+        self.status_manager = StatusManager(self.statusBar())
+        self.status_manager.show('%s started.' % __appname__)
 
         # Application state.
         self.image = QImage()
@@ -498,13 +557,13 @@ class MainWindow(QMainWindow, WindowMixin):
                 break
         self.resize(size)
         self.move(position)
+
         save_dir = ustr(settings.get(SETTING_SAVE_DIR, None))
         self.last_open_dir = ustr(settings.get(SETTING_LAST_OPEN_DIR, None))
         if self.default_save_dir is None and save_dir is not None and os.path.exists(save_dir):
             self.default_save_dir = save_dir
-            self.statusBar().showMessage('%s started. Annotation will be saved to %s' %
-                                         (__appname__, self.default_save_dir))
-            self.statusBar().show()
+
+        self.update_path_info()
 
         self.restoreState(settings.get(SETTING_WIN_STATE, QByteArray()))
         Shape.line_color = self.line_color = QColor(settings.get(SETTING_LINE_COLOR, DEFAULT_LINE_COLOR))
@@ -661,7 +720,7 @@ class MainWindow(QMainWindow, WindowMixin):
         QTimer.singleShot(0, function)
 
     def status(self, message, delay=5000):
-        self.statusBar().showMessage(message, delay)
+        self.status_manager.show(message, delay)
 
     def reset_state(self):
         self.items_to_shapes.clear()
@@ -787,7 +846,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     # Tzutalin 20160906 : Add file list and dock to move faster
     def file_item_double_clicked(self, item=None):
-        self.cur_img_idx = self.m_img_list.index(ustr(item.text()))
+        abs_path = ustr(item.data(Qt.UserRole))
+        self.cur_img_idx = self.m_img_list.index(abs_path)
         filename = self.m_img_list[self.cur_img_idx]
         if filename:
             self.load_file(filename)
@@ -1200,7 +1260,12 @@ class MainWindow(QMainWindow, WindowMixin):
             self.show_bounding_box_from_annotation_file(self.file_path)
 
             counter = self.counter_str()
-            self.setWindowTitle(__appname__ + ' ' + file_path + ' ' + counter)
+            if self.dir_name:
+                rel_file = os.path.relpath(file_path, self.dir_name)
+                self.setWindowTitle(__appname__ + ' - ' + self.dir_name + ' - ' + rel_file + ' ' + counter)
+            else:
+                self.setWindowTitle(__appname__ + ' ' + file_path + ' ' + counter)
+            self.update_path_info()
 
             # Default : select last item if there is at least one item
             if self.label_list.count():
@@ -1264,6 +1329,11 @@ class MainWindow(QMainWindow, WindowMixin):
     def adjust_scale(self, initial=False):
         value = self.scalers[self.FIT_WINDOW if initial else self.zoom_mode]()
         self.zoom_widget.setValue(int(100 * value))
+
+    def update_path_info(self):
+        """Set the default status bar message to current save directory."""
+        if self.default_save_dir:
+            self.status_manager.set_default(u'保存: %s' % self.default_save_dir)
 
     def scale_fit_window(self):
         """Figure out the size of the pixmap in order to fit the main widget."""
@@ -1345,19 +1415,18 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if dir_path is not None and len(dir_path) > 1:
             self.default_save_dir = dir_path
+            self.update_path_info()
 
         if self.file_path is not None:
             self.show_bounding_box_from_annotation_file(self.file_path)
 
-        self.statusBar().showMessage('%s . Annotation will be saved to %s' %
-                                     ('Change saved folder', self.default_save_dir))
-        self.statusBar().show()
+        self.status('%s . Annotation will be saved to %s' %
+                     ('Change saved folder', self.default_save_dir))
 
 
     def open_annotation_dialog(self, _value=False):
         if self.file_path is None:
-            self.statusBar().showMessage('Please select image first')
-            self.statusBar().show()
+            self.status_manager.show('Please select image first')
             return
 
         path = os.path.dirname(ustr(self.file_path))\
@@ -1399,6 +1468,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.last_open_dir = target_dir_path
         self.import_dir_images(target_dir_path)
         self.default_save_dir = target_dir_path
+        self.update_path_info()
         if self.file_path:
             self.show_bounding_box_from_annotation_file(file_path=self.file_path)
 
@@ -1408,13 +1478,16 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.last_open_dir = dir_path
         self.dir_name = dir_path
+        self.update_path_info()
         self.file_path = None
         self.file_list_widget.clear()
         self.m_img_list = self.scan_all_images(dir_path)
         self.img_count = len(self.m_img_list)
         self.open_next_image()
         for imgPath in self.m_img_list:
-            item = QListWidgetItem(imgPath)
+            relative = os.path.relpath(imgPath, dir_path) if dir_path else imgPath
+            item = QListWidgetItem(relative)
+            item.setData(Qt.UserRole, imgPath)
             self.file_list_widget.addItem(item)
 
     def verify_image(self, _value=False):
@@ -1545,8 +1618,7 @@ class MainWindow(QMainWindow, WindowMixin):
     def _save_file(self, annotation_file_path):
         if annotation_file_path and self.save_labels(annotation_file_path):
             self.set_clean()
-            self.statusBar().showMessage('Saved to  %s' % annotation_file_path)
-            self.statusBar().show()
+        self.status('Saved to  %s' % annotation_file_path)
 
     def close_file(self, _value=False):
         if not self.may_continue():

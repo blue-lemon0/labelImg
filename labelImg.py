@@ -23,6 +23,7 @@ from libs.stringBundle import StringBundle
 from libs.canvas import Canvas, KEY_BINDINGS
 from libs.zoomWidget import ZoomWidget
 from libs.lightWidget import LightWidget
+from libs.compoundWidgets import ZoomWidgetPanel, LightWidgetPanel
 from libs.labelDialog import LabelDialog
 from libs.colorDialog import ColorDialog
 from libs.labelFile import LabelFile, LabelFileError, LabelFileFormat
@@ -303,7 +304,6 @@ class MainWindow(QMainWindow, WindowMixin):
         show_shortcut = action(get_str('shortcut'), self.show_shortcuts_dialog, None, 'help', get_str('shortcut'))
 
         zoom = QWidgetAction(self)
-        zoom.setDefaultWidget(self.zoom_widget)
         self.zoom_widget.setWhatsThis(
             u"Zoom in or out of the image. Also accessible with"
             " %s and %s from the canvas." % (format_shortcut("Ctrl+[-+]"),
@@ -334,7 +334,6 @@ class MainWindow(QMainWindow, WindowMixin):
         }
 
         light = QWidgetAction(self)
-        light.setDefaultWidget(self.light_widget)
         self.light_widget.setWhatsThis(
             u"Brighten or darken current image. Also accessible with"
             " %s and %s from the canvas." % (format_shortcut("Ctrl+Shift+[-+]"),
@@ -352,6 +351,14 @@ class MainWindow(QMainWindow, WindowMixin):
         # Group light controls into a list for easier toggling.
         light_actions = (self.light_widget, light_brighten,
                          light_darken, light_org)
+
+        # Compound: [-] [65] [+] in one toolbar row.
+        self.zoom_panel = ZoomWidgetPanel(self.zoom_widget, zoom_in, zoom_out)
+        zoom_compound = QWidgetAction(self)
+        zoom_compound.setDefaultWidget(self.zoom_panel)
+        self.light_panel = LightWidgetPanel(self.light_widget, light_brighten, light_darken)
+        light_compound = QWidgetAction(self)
+        light_compound.setDefaultWidget(self.light_panel)
 
         edit = action(get_str('editLabel'), self.edit_label,
                       'Ctrl+E', 'edit', get_str('editLabelDetail'),
@@ -454,8 +461,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.tools = self.toolbar('Tools')
         self.actions.beginner = (
             open, open_dir, change_save_dir, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
-            zoom_in, zoom, zoom_out, fit_window, fit_width, None,
-            light_brighten, light, light_darken, light_org)
+            zoom_compound, fit_window, fit_width, None,
+            light_compound, light_org)
 
         self.actions.advanced = (
             open, open_dir, change_save_dir, open_next_image, open_prev_image, save, save_format, None,

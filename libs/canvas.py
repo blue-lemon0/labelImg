@@ -6,6 +6,17 @@ from PyQt5.QtWidgets import *
 from libs.shape import Shape
 from libs.utils import distance
 
+# ── Key Binding Table ──────────────────────────────────
+# (key_code, modifier_mask) → action_name
+# Decouples physical keys from logical actions.
+# Future: load from user config file.
+KEY_BINDINGS = {
+    (Qt.Key_C, Qt.NoModifier):   'corner_cw',
+    (Qt.Key_X, Qt.NoModifier):   'corner_ccw',
+    (Qt.Key_Z, Qt.NoModifier):   'shape_next',
+    (Qt.Key_Z, Qt.ShiftModifier): 'shape_prev',
+}
+
 CURSOR_DEFAULT = Qt.ArrowCursor
 CURSOR_POINT = Qt.PointingHandCursor
 CURSOR_DRAW = Qt.CrossCursor
@@ -62,6 +73,15 @@ class Canvas(QWidget):
 
         # initialisation for panning
         self.pan_initial_pos = QPoint()
+
+        # Keyboard corner selection mode (-1 = whole shape / translate, 0-3 = specific corner)
+        self.corner_idx = -1
+
+        # Multi-key arrow movement (hold Left+Down for diagonal, etc.)
+        self._pressed_keys = set()
+        self._move_timer = QTimer(self)
+        self._move_timer.setInterval(50)  # ~20 fps continuous move
+        self._move_timer.timeout.connect(self._process_held_keys)
 
     def set_drawing_color(self, qcolor):
         self.drawing_line_color = qcolor
@@ -452,7 +472,9 @@ class Canvas(QWidget):
     def de_select_shape(self):
         if self.selected_shape:
             self.selected_shape.selected = False
+            self.selected_shape.clear_vertex_select()
             self.selected_shape = None
+            self.corner_idx = -1
             self.set_hiding(False)
             self.selectionChanged.emit(False)
             self.update()
@@ -464,6 +486,7 @@ class Canvas(QWidget):
             if self.selected_shape in self.shapes:
                 self.shapes.remove(self.selected_shape)
             self.selected_shape = None
+            self.corner_idx = -1
             self.update()
             return shape
 
@@ -513,8 +536,13 @@ class Canvas(QWidget):
         Shape.label_font_size = self.label_font_size
         for shape in self.shapes:
             if (shape.selected or not self._hide_background) and self.isVisible(shape):
-                shape.fill = shape.selected or shape == self.h_shape
+                # fill 只留给选中的 shape
+                shape.fill = shape.selected
+                # save/restore 隔离每个 shape 的 painter state
+                # 防止上一个 shape 的 blue-dot setBrush 泄漏到下一个 shape
+                p.save()
                 shape.paint(p)
+                p.restore()
         if self.current:
             self.current.paint(p)
             self.line.paint(p)
@@ -621,6 +649,44 @@ class Canvas(QWidget):
             h_delta and self.scrollRequest.emit(h_delta, Qt.Horizontal)
         ev.accept()
 
+    def execute_action(self, action, event=None):
+        """Dispatch a named action.
+        
+        Separates 'what to do' from 'which key triggers it'.
+        Used by both Canvas.keyPressEvent and MainWindow.eventFilter.
+        Future: load action-to-behavior mapping from user config.
+        """
+        if action == 'corner_cw':
+            if self.selected_shape:
+                self._cycle_corner(1)
+        elif action == 'corner_ccw':
+            if self.selected_shape:
+                self._cycle_corner(-1)
+        elif action == 'shape_next':
+            self._select_next_shape(1)
+        elif action == 'shape_prev':
+            self._select_next_shape(-1)
+
+    def _select_next_shape(self, direction):
+        """Select next (direction=1) or previous (direction=-1) shape."""
+        if not self.shapes:
+            return
+        # Clear stale mouse-hover state — keyboard selection shouldn't inherit it
+        self.un_highlight()
+        if not self.selected_shape:
+            self.select_shape(self.shapes[0 if direction == 1 else -1])
+            return
+        if len(self.shapes) == 1:
+            return
+        idx = self.shapes.index(self.selected_shape)
+        next_idx = (idx + direction) % len(self.shapes)
+        self.select_shape(self.shapes[next_idx])
+
+    def _lookup_action(self, ev):
+        """Map a key event to an action name via KEY_BINDINGS."""
+        shift = ev.modifiers() & Qt.ShiftModifier
+        return KEY_BINDINGS.get((ev.key(), shift))
+
     def keyPressEvent(self, ev):
         key = ev.key()
         if key == Qt.Key_Escape and self.current:
@@ -630,43 +696,166 @@ class Canvas(QWidget):
             self.update()
         elif key == Qt.Key_Return and self.can_close_shape():
             self.finalise()
-        elif key == Qt.Key_Left and self.selected_shape:
-            self.move_one_pixel('Left')
-        elif key == Qt.Key_Right and self.selected_shape:
-            self.move_one_pixel('Right')
-        elif key == Qt.Key_Up and self.selected_shape:
-            self.move_one_pixel('Up')
-        elif key == Qt.Key_Down and self.selected_shape:
-            self.move_one_pixel('Down')
+        elif key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down) and self.selected_shape:
+            if not ev.isAutoRepeat():
+                self._pressed_keys.add(key)
+                if not self._move_timer.isActive():
+                    self._move_timer.start()
+                self._process_held_keys()  # Immediate first move, no delay
+        elif key == Qt.Key_Escape:
+            self._reset_corner_mode()
+        else:
+            # Binding table dispatch — decouples keys from logic
+            action = self._lookup_action(ev)
+            if action:
+                self.execute_action(action)
+
+    def keyReleaseEvent(self, ev):
+        key = ev.key()
+        if key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down):
+            if not ev.isAutoRepeat():
+                self._pressed_keys.discard(key)
+                if not self._pressed_keys:
+                    self._move_timer.stop()
+
+    def _cycle_corner(self, direction):
+        """Cycle selection among corners using data-driven transitions.
+        direction=1:  Clockwise   -1→0→1→2→3→-1→0…
+        direction=-1: Counter-CW  -1→0→3→2→1→-1→0…
+        Both share the same logic — only the transition table differs."""
+        shape = self.selected_shape
+        if shape is None:
+            return
+        if self.corner_idx == -1:
+            self.corner_idx = 0  # First press always enters at TL(0)
+        else:
+            transitions = {
+                1: {0: 1, 1: 2, 2: 3, 3: -1},    # clockwise
+                -1: {0: 3, 3: 2, 2: 1, 1: -1},   # counter-clockwise
+            }
+            self.corner_idx = transitions[direction].get(self.corner_idx, -1)
+        self._apply_corner_visual()
+        self.repaint()
+
+    def _apply_corner_visual(self):
+        """Update selected shape's visual indicator based on current corner_idx."""
+        shape = self.selected_shape
+        if shape is None:
+            return
+        if self.corner_idx >= 0:
+            shape.set_vertex_select(self.corner_idx)
+        else:
+            shape.clear_vertex_select()
+
+    def _reset_corner_mode(self):
+        """Reset to translate mode for all shapes."""
+        if self.corner_idx != -1:
+            self.corner_idx = -1
+            if self.selected_shape:
+                self.selected_shape.clear_vertex_select()
+            self.repaint()
 
     def move_one_pixel(self, direction):
-        # print(self.selectedShape.points)
-        if direction == 'Left' and not self.move_out_of_bound(QPointF(-1.0, 0)):
-            # print("move Left one pixel")
-            self.selected_shape.points[0] += QPointF(-1.0, 0)
-            self.selected_shape.points[1] += QPointF(-1.0, 0)
-            self.selected_shape.points[2] += QPointF(-1.0, 0)
-            self.selected_shape.points[3] += QPointF(-1.0, 0)
-        elif direction == 'Right' and not self.move_out_of_bound(QPointF(1.0, 0)):
-            # print("move Right one pixel")
-            self.selected_shape.points[0] += QPointF(1.0, 0)
-            self.selected_shape.points[1] += QPointF(1.0, 0)
-            self.selected_shape.points[2] += QPointF(1.0, 0)
-            self.selected_shape.points[3] += QPointF(1.0, 0)
-        elif direction == 'Up' and not self.move_out_of_bound(QPointF(0, -1.0)):
-            # print("move Up one pixel")
-            self.selected_shape.points[0] += QPointF(0, -1.0)
-            self.selected_shape.points[1] += QPointF(0, -1.0)
-            self.selected_shape.points[2] += QPointF(0, -1.0)
-            self.selected_shape.points[3] += QPointF(0, -1.0)
-        elif direction == 'Down' and not self.move_out_of_bound(QPointF(0, 1.0)):
-            # print("move Down one pixel")
-            self.selected_shape.points[0] += QPointF(0, 1.0)
-            self.selected_shape.points[1] += QPointF(0, 1.0)
-            self.selected_shape.points[2] += QPointF(0, 1.0)
-            self.selected_shape.points[3] += QPointF(0, 1.0)
-        self.shapeMoved.emit()
-        self.repaint()
+        """Single-step move (kept for API compatibility)."""
+        step = QPointF(0, 0)
+        if direction == 'Left':
+            step = QPointF(-1.0, 0)
+        elif direction == 'Right':
+            step = QPointF(1.0, 0)
+        elif direction == 'Up':
+            step = QPointF(0, -1.0)
+        elif direction == 'Down':
+            step = QPointF(0, 1.0)
+        self._apply_move_step(step)
+
+    def _apply_move_step(self, step):
+        """Apply a (dx, dy) step, either to a corner vertex or to the whole shape."""
+        if self.corner_idx >= 0:
+            if self._is_valid_vertex_move(self.corner_idx, step):
+                self._move_vertex(self.corner_idx, step)
+                self.shapeMoved.emit()
+                self.repaint()
+        else:
+            if not self.move_out_of_bound(step):
+                self.selected_shape.points[0] += step
+                self.selected_shape.points[1] += step
+                self.selected_shape.points[2] += step
+                self.selected_shape.points[3] += step
+                self.shapeMoved.emit()
+                self.repaint()
+
+    def _process_held_keys(self):
+        """Timer callback: combine all held arrow keys into one diagonal step."""
+        if not self.selected_shape:
+            self._pressed_keys.clear()
+            self._move_timer.stop()
+            return
+        dx = 0.0
+        dy = 0.0
+        if Qt.Key_Left in self._pressed_keys:
+            dx -= 1.0
+        if Qt.Key_Right in self._pressed_keys:
+            dx += 1.0
+        if Qt.Key_Up in self._pressed_keys:
+            dy -= 1.0
+        if Qt.Key_Down in self._pressed_keys:
+            dy += 1.0
+        if dx == 0.0 and dy == 0.0:
+            return
+        self._apply_move_step(QPointF(dx, dy))
+
+    def _move_vertex(self, index, step):
+        """Move a single vertex and its two adjacent edges to maintain rectangle.
+        Mirrors the logic in bounded_move_vertex()."""
+        shape = self.selected_shape
+        # Calculate shift for adjacent vertices
+        left_idx = (index + 1) % 4
+        right_idx = (index + 3) % 4
+        if index % 2 == 0:
+            right_shift = QPointF(step.x(), 0)
+            left_shift = QPointF(0, step.y())
+        else:
+            left_shift = QPointF(step.x(), 0)
+            right_shift = QPointF(0, step.y())
+        # Apply moves
+        shape.move_vertex_by(index, step)
+        shape.move_vertex_by(right_idx, right_shift)
+        shape.move_vertex_by(left_idx, left_shift)
+
+    def _is_valid_vertex_move(self, index, step):
+        """Check that moving vertex[index] by step keeps rectangle valid (≥2px, within pixmap)."""
+        shape = self.selected_shape
+        # Compute proposed new positions for all 4 corners
+        new_points = [QPointF(p) for p in shape.points]
+
+        # Apply same logic as _move_vertex
+        left_idx = (index + 1) % 4
+        right_idx = (index + 3) % 4
+        if index % 2 == 0:
+            right_shift = QPointF(step.x(), 0)
+            left_shift = QPointF(0, step.y())
+        else:
+            left_shift = QPointF(step.x(), 0)
+            right_shift = QPointF(0, step.y())
+
+        new_points[index] += step
+        new_points[right_idx] += right_shift
+        new_points[left_idx] += left_shift
+
+        # Check all points within pixmap
+        for p in new_points:
+            if self.out_of_pixmap(p):
+                return False
+
+        # Check minimum size (2px width and height)
+        xs = [p.x() for p in new_points]
+        ys = [p.y() for p in new_points]
+        width = max(xs) - min(xs)
+        height = max(ys) - min(ys)
+        if width < 2.0 or height < 2.0:
+            return False
+
+        return True
 
     def move_out_of_bound(self, step):
         points = [p1 + p2 for p1, p2 in zip(self.selected_shape.points, [step] * 4)]

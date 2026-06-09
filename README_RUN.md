@@ -1,5 +1,21 @@
 # LabelImg — 快速开始
 
+图像标注工具，在图片上画框打标签，支持 Pascal VOC / YOLO / CreateML 格式导出。
+
+## 项目文件说明
+
+| 文件 | 说明 |
+|------|------|
+| `labelImg.py` | 主程序，运行它启动 |
+| `libs/` | 核心模块（画布、导入导出、UI 等） |
+| `resources/` | 图标和 UI 文案 |
+| `resources.qrc` | 资源清单，改文案后编译用 |
+| `requirements.txt` | Python 依赖 |
+| `README_RUN.md` | 本文件 |
+| `README.rst` | 上游原版文档 |
+| `LICENSE` | MIT 开源许可证 |
+| `__init__.py` | Python 包标记 |
+
 ## 安装
 
 ```bash

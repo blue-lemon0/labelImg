@@ -14,6 +14,7 @@ DEFAULT_SELECT_LINE_COLOR = QColor(255, 255, 255)
 DEFAULT_SELECT_FILL_COLOR = QColor(0, 128, 255, 155)
 DEFAULT_VERTEX_FILL_COLOR = QColor(0, 255, 0, 255)
 DEFAULT_HVERTEX_FILL_COLOR = QColor(255, 0, 0)
+VERTEX_SELECT_COLOR = QColor(30, 144, 255)  # DodgerBlue for keyboard corner selection
 
 
 class Shape(object):
@@ -49,6 +50,8 @@ class Shape(object):
             self.MOVE_VERTEX: (1.5, self.P_SQUARE),
         }
 
+        self._vertex_select_idx = None  # keyboard-selected corner index (0-3) or None
+
         self._closed = False
 
         if line_color is not None:
@@ -82,7 +85,12 @@ class Shape(object):
 
     def paint(self, painter):
         if self.points:
-            color = self.select_line_color if self.selected else self.line_color
+            # In corner-vertex mode, don't render the selected style.
+            # The blue vertex dot alone indicates focus.
+            in_corner_mode = self._vertex_select_idx is not None
+            render_selected = self.selected and not in_corner_mode
+
+            color = self.select_line_color if render_selected else self.line_color
             pen = QPen(color)
             # Try using integer sizes for smoother drawing(?)
             pen.setWidth(max(1, int(round(2.0 / self.scale))))
@@ -126,9 +134,23 @@ class Shape(object):
                         min_y += min_y_label
                     painter.drawText(int(min_x), int(min_y), self.label)
 
+            # Draw selected corner indicator (blue, on top of regular vertex)
+            if in_corner_mode and self._vertex_select_idx < len(self.points):
+                si = self._vertex_select_idx
+                sd = self.point_size / self.scale
+                sp = self.points[si]
+                painter.setBrush(VERTEX_SELECT_COLOR)
+                painter.setPen(QPen(VERTEX_SELECT_COLOR))
+                if self.point_type == self.P_ROUND:
+                    painter.drawEllipse(sp, sd / 2.0, sd / 2.0)
+                else:
+                    painter.drawRect(sp.x() - sd / 2, sp.y() - sd / 2, sd, sd)
+
             if self.fill:
-                color = self.select_fill_color if self.selected else self.fill_color
-                painter.fillPath(line_path, color)
+                if in_corner_mode:
+                    pass  # No fill in corner mode — keep the image clear
+                else:
+                    painter.fillPath(line_path, self.select_fill_color if render_selected else self.fill_color)
 
     def draw_vertex(self, path, i):
         d = self.point_size / self.scale
@@ -181,6 +203,18 @@ class Shape(object):
 
     def highlight_clear(self):
         self._highlight_index = None
+
+    def set_vertex_select(self, idx):
+        """Set the keyboard-selected corner index (0-3) for blue highlight."""
+        self._vertex_select_idx = idx
+
+    def clear_vertex_select(self):
+        """Clear the keyboard-selected corner indicator."""
+        self._vertex_select_idx = None
+
+    def get_vertex_select(self):
+        """Return current keyboard-selected corner index, or -1 if none."""
+        return self._vertex_select_idx if self._vertex_select_idx is not None else -1
 
     def copy(self):
         shape = Shape("%s" % self.label)

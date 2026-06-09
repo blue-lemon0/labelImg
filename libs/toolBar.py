@@ -20,12 +20,13 @@ class ToolBar(QToolBar):
         btn = ToolButton()
         btn.setDefaultAction(action)
         btn.setToolButtonStyle(self.toolButtonStyle())
+        btn.setStyleSheet("QToolButton { text-align: left; padding-left: 4px; }")
         self.addWidget(btn)
 
 
 class ToolButton(QToolButton):
     """ToolBar companion class which ensures all buttons have the same size."""
-    minSize = (60, 60)
+    minSize = (100, 36)
 
     def minimumSizeHint(self):
         ms = super(ToolButton, self).minimumSizeHint()

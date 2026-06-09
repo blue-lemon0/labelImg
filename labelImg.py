@@ -52,6 +52,7 @@ class WindowMixin(object):
         toolbar.setObjectName(u'%sToolBar' % title)
         # toolbar.setOrientation(Qt.Vertical)
         toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        toolbar.setIconSize(QSize(24, 24))
         if actions:
             add_actions(toolbar, actions)
         self.addToolBar(Qt.LeftToolBarArea, toolbar)

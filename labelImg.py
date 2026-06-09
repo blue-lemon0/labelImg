@@ -242,6 +242,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_dock = QDockWidget(get_str('fileList'), self)
         self.file_dock.setObjectName(get_str('files'))
         self.file_dock.setWidget(file_list_container)
+        self._file_dock_base = get_str('fileList')
 
         self.zoom_widget = ZoomWidget()
         self.light_widget = LightWidget(get_str('lightWidgetTitle'))
@@ -1260,11 +1261,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.show_bounding_box_from_annotation_file(self.file_path)
 
             counter = self.counter_str()
-            if self.dir_name:
-                rel_file = os.path.relpath(file_path, self.dir_name)
-                self.setWindowTitle(__appname__ + ' - ' + self.dir_name + ' - ' + rel_file + ' ' + counter)
-            else:
-                self.setWindowTitle(__appname__ + ' ' + file_path + ' ' + counter)
+            self.setWindowTitle(__appname__ + ' ' + file_path + ' ' + counter)
+            self.file_dock.setWindowTitle(self._file_dock_base + ' ' + counter)
             self.update_path_info()
 
             # Default : select last item if there is at least one item

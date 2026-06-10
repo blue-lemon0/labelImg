@@ -5,6 +5,7 @@ import codecs
 import os.path
 import platform
 import shutil
+import subprocess
 import sys
 import webbrowser as wb
 from functools import partial
@@ -37,7 +38,7 @@ from libs.create_ml_io import CreateMLReader
 from libs.create_ml_io import JSON_EXT
 from libs.ustr import ustr
 from libs.hashableQListWidgetItem import HashableQListWidgetItem
-from libs.labelStats import LabelStatsDialog, scan_single_annotation
+from libs.labelStats import LabelStatsDialog, scan_single_annotation, resolve_annotation_path
 
 __appname__ = 'labelImg'
 
@@ -906,15 +907,7 @@ class MainWindow(QMainWindow, WindowMixin):
     # 右键菜单：在文件管理器中定位标注文件
     def _find_annotation_path(self, img_path):
         """查找图片对应的标注文件路径（XML / TXT / JSON）。"""
-        for ext in (XML_EXT, TXT_EXT, JSON_EXT):
-            if self.default_save_dir:
-                basename = os.path.splitext(os.path.basename(img_path))[0]
-                anno_path = os.path.join(self.default_save_dir, basename + ext)
-            else:
-                anno_path = os.path.splitext(img_path)[0] + ext
-            if os.path.isfile(anno_path):
-                return anno_path
-        return None
+        return resolve_annotation_path(img_path, self.default_save_dir)
 
     def _pop_file_list_menu(self, point):
         item = self.file_list_widget.itemAt(point)
@@ -934,7 +927,6 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _open_in_file_manager(self, path):
         """在系统文件管理器中打开并选中文件。"""
-        import subprocess
         path = os.path.normpath(path)
         if platform.system() == 'Windows':
             subprocess.Popen(['explorer', '/select,', path])
@@ -1583,29 +1575,22 @@ class MainWindow(QMainWindow, WindowMixin):
             1 — 标注文件存在但为空（无标签）
             2 — 标注文件存在且有实际标注
         """
-        for ext in (XML_EXT, TXT_EXT, JSON_EXT):
-            if self.default_save_dir:
-                basename = os.path.splitext(os.path.basename(img_path))[0]
-                anno_path = os.path.join(self.default_save_dir, basename + ext)
-            else:
-                anno_path = os.path.splitext(img_path)[0] + ext
+        anno_path = resolve_annotation_path(img_path, self.default_save_dir)
+        if not anno_path:
+            return 0
 
-            if not os.path.isfile(anno_path):
-                continue
-
-            try:
-                with open(anno_path, 'rb') as f:
-                    head = f.read(4096)
-                if ext == XML_EXT:
-                    return 2 if b'<object>' in head else 1
-                elif ext == TXT_EXT:
-                    return 2 if any(l.strip() for l in head.split(b'\n') if l.strip()) else 1
-                else:  # JSON
-                    return 2 if b'"shapes"' in head else 1
-            except OSError:
-                return 0
-
-        return 0
+        ext = os.path.splitext(anno_path)[1].lower()
+        try:
+            with open(anno_path, 'rb') as f:
+                head = f.read(4096)
+            if ext == XML_EXT:
+                return 2 if b'<object>' in head else 1
+            elif ext == TXT_EXT:
+                return 2 if any(l.strip() for l in head.split(b'\n') if l.strip()) else 1
+            else:  # JSON
+                return 2 if b'"shapes"' in head else 1
+        except OSError:
+            return 0
 
     def import_dir_images(self, dir_path):
         if not self.may_continue() or not dir_path:

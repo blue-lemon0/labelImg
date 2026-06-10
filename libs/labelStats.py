@@ -3,7 +3,7 @@
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QCheckBox, QHeaderView, QPushButton,
-                             QWidget, QLabel, QMessageBox, QProgressDialog)
+                             QWidget, QLabel, QMessageBox)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from collections import Counter, defaultdict
@@ -68,7 +68,6 @@ class LabelStatsDialog(QDialog):
         # ── 总开关 ──
         self._master_cb = QCheckBox('启用按标签跳跃翻页（勾选下方标签后，A / D 只在这些标签的图片间跳转）')
         self._master_cb.setChecked(self._master_on)
-        self._master_cb.toggled.connect(self._on_master_toggled)
         layout.addWidget(self._master_cb)
 
         # ── 表格 ──
@@ -191,10 +190,6 @@ class LabelStatsDialog(QDialog):
 
     # ── 内部回调 ──
 
-    def _on_master_toggled(self, on):
-        """总开关切换：只影响翻页行为，不锁勾选框。"""
-        pass
-
     def _on_checkbox_toggled(self):
         """任一勾选框状态变化时：同步更新表头全选勾。"""
         if not self._label_cbs:
@@ -257,6 +252,27 @@ class LabelStatsDialog(QDialog):
         return warnings
 
 
+def resolve_annotation_path(img_path, default_save_dir):
+    """查找图片对应的标注文件路径（XML / TXT / JSON），返回第一个找到的。
+
+    Returns:
+        str | None: 标注文件绝对路径，或 None。
+    """
+    from libs.pascal_voc_io import XML_EXT
+    from libs.yolo_io import TXT_EXT
+    from libs.create_ml_io import JSON_EXT
+
+    basename = os.path.splitext(os.path.basename(img_path))[0]
+    for ext in (XML_EXT, TXT_EXT, JSON_EXT):
+        if default_save_dir:
+            candidate = os.path.join(default_save_dir, basename + ext)
+        else:
+            candidate = os.path.splitext(img_path)[0] + ext
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def scan_label_statistics(img_list, default_save_dir):
     """全量扫描图片列表，提取标注文件中的标签信息。
 
@@ -264,30 +280,10 @@ def scan_label_statistics(img_list, default_save_dir):
         dict: {label_name: {'box_count': int, 'image_count': int, 'images': set}}
         空标签会以 '' 空字符串作为 key 存入。
     """
-    from xml.etree import ElementTree
-    from libs.yolo_io import TXT_EXT
-    from libs.create_ml_io import JSON_EXT
-    from libs.pascal_voc_io import XML_EXT
-
     stats = defaultdict(lambda: {'box_count': 0, 'image_count': 0, 'images': set()})
 
     for img_path in img_list:
-        basename = os.path.splitext(os.path.basename(img_path))[0]
-        anno_path = None
-
-        if default_save_dir:
-            for ext in (XML_EXT, TXT_EXT, JSON_EXT):
-                candidate = os.path.join(default_save_dir, basename + ext)
-                if os.path.isfile(candidate):
-                    anno_path = candidate
-                    break
-        else:
-            for ext in (XML_EXT, TXT_EXT, JSON_EXT):
-                candidate = os.path.splitext(img_path)[0] + ext
-                if os.path.isfile(candidate):
-                    anno_path = candidate
-                    break
-
+        anno_path = resolve_annotation_path(img_path, default_save_dir)
         if not anno_path:
             continue
 
@@ -314,29 +310,10 @@ def scan_label_to_indices(img_list, default_save_dir):
     专供过滤翻页使用，结果按索引升序排列。
     空标签统一记作 key=''。
     """
-    from libs.pascal_voc_io import XML_EXT
-    from libs.yolo_io import TXT_EXT
-    from libs.create_ml_io import JSON_EXT
-
     mapping = defaultdict(list)
 
     for idx, img_path in enumerate(img_list):
-        basename = os.path.splitext(os.path.basename(img_path))[0]
-        anno_path = None
-
-        if default_save_dir:
-            for ext in (XML_EXT, TXT_EXT, JSON_EXT):
-                candidate = os.path.join(default_save_dir, basename + ext)
-                if os.path.isfile(candidate):
-                    anno_path = candidate
-                    break
-        else:
-            for ext in (XML_EXT, TXT_EXT, JSON_EXT):
-                candidate = os.path.splitext(img_path)[0] + ext
-                if os.path.isfile(candidate):
-                    anno_path = candidate
-                    break
-
+        anno_path = resolve_annotation_path(img_path, default_save_dir)
         if not anno_path:
             continue
 
@@ -361,27 +338,9 @@ def scan_single_annotation(img_path, default_save_dir):
     Returns:
         dict, {label_name: box_count}，空标签 key 为 ''
     """
-    from libs.pascal_voc_io import XML_EXT
-    from libs.yolo_io import TXT_EXT
-    from libs.create_ml_io import JSON_EXT
     from collections import Counter
 
-    basename = os.path.splitext(os.path.basename(img_path))[0]
-    anno_path = None
-
-    if default_save_dir:
-        for ext in (XML_EXT, TXT_EXT, JSON_EXT):
-            candidate = os.path.join(default_save_dir, basename + ext)
-            if os.path.isfile(candidate):
-                anno_path = candidate
-                break
-    else:
-        for ext in (XML_EXT, TXT_EXT, JSON_EXT):
-            candidate = os.path.splitext(img_path)[0] + ext
-            if os.path.isfile(candidate):
-                anno_path = candidate
-                break
-
+    anno_path = resolve_annotation_path(img_path, default_save_dir)
     if not anno_path:
         return {}
 

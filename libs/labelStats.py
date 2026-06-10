@@ -2,8 +2,8 @@
 """标签统计对话框：扫描数据集，展示标签名 + 出现次数 + 涉及图片数 + 疑似拼写错误告警。"""
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
-                             QTableWidgetItem, QPushButton, QHeaderView,
-                             QLabel, QMessageBox, QProgressDialog)
+                             QTableWidgetItem, QCheckBox, QHeaderView, QPushButton,
+                             QWidget, QLabel, QMessageBox, QProgressDialog)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from collections import Counter, defaultdict
@@ -16,26 +16,30 @@ from libs.constants import DEFAULT_ENCODING
 class LabelStatsDialog(QDialog):
     """标签统计对话框，以表格展示全数据集的标签分布。
 
-    双击任意行 → 跳转到包含该标签的第一张图片。
-    点击【跳转】→ 激活过滤模式，a/d 只在该标签的图片间跳转。
+    每一行有一个勾选框，勾选的标签即为「跳跃翻页」的目标标签。
+    双击任意行 → 跳转到包含该标签的第一张图片并关闭对话框。
+    顶部「主开关」控制是否启用跳跃翻页模式（关闭后即恢复普通逐张翻页）。
     """
 
-    TABLE_HEADERS = ['标签名', '标注框数', '涉及图片数', '疑似拼写错误', '操作']
+    TABLE_HEADERS = ['', '标签名', '标注框数', '涉及图片数', '疑似拼写错误']
 
-    def __init__(self, stats, parent=None, on_jump_to=None, on_navigate=None,
-                 total_img_count=0):
+    def __init__(self, stats, parent=None, on_jump_to=None,
+                 total_img_count=0, nav_labels=None, master_on=False):
         """
         Args:
             stats: dict, {label_name: {'box_count': int, 'image_count': int, 'images': set}}
             on_jump_to: callable(img_path), 双击行时回调
-            on_navigate: callable(label_name), 点击【跳转】时回调，用于激活过滤翻页
             total_img_count: 数据集总图片数（含未标注），用于进度显示
+            nav_labels: set[str], 当前已勾选的标签集合（用于初始化）
+            master_on: bool, 总开关初始状态
         """
         super(LabelStatsDialog, self).__init__(parent)
         self._stats = stats
         self._on_jump_to = on_jump_to
-        self._on_navigate = on_navigate
         self._total_img_count = total_img_count
+        self._nav_labels = nav_labels or set()  # 当前勾选的标签
+        self._master_on = master_on  # 总开关初始状态
+        self._label_cbs = {}    # {真实标签名: QCheckBox}
         self.setWindowTitle('标签统计')
         self.resize(760, 520)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
@@ -44,7 +48,7 @@ class LabelStatsDialog(QDialog):
     def _build_ui(self, raw_stats):
         layout = QVBoxLayout(self)
 
-        # 汇总信息
+        # ── 汇总信息 ──
         total_boxes = sum(v['box_count'] for v in raw_stats.values())
         total_labels = len(raw_stats)
         total_images = len(set().union(*(v['images'] for v in raw_stats.values())))
@@ -61,16 +65,57 @@ class LabelStatsDialog(QDialog):
         summary.setStyleSheet('font-weight: bold; padding: 6px;')
         layout.addWidget(summary)
 
-        # 表格
+        # ── 总开关 ──
+        self._master_cb = QCheckBox('启用按标签跳跃翻页（勾选下方标签后，A / D 只在这些标签的图片间跳转）')
+        self._master_cb.setChecked(self._master_on)
+        self._master_cb.toggled.connect(self._on_master_toggled)
+        layout.addWidget(self._master_cb)
+
+        # ── 表格 ──
         self.table = QTableWidget()
         self.table.setColumnCount(len(self.TABLE_HEADERS))
         self.table.setHorizontalHeaderLabels(self.TABLE_HEADERS)
-        self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        # 第 0 列表头：用真实的 QCheckBox 覆盖（与各行勾选框一致）
+        header = self.table.horizontalHeader()
+        self._header_cb = QCheckBox()
+        self._header_cb.setChecked(False)
+        self._header_cb.stateChanged.connect(self._on_header_cb_toggled)
+        self._header_cb.setParent(header)
+        self._header_cb.show()
+        header.sectionResized.connect(lambda idx, *_:
+                                      self._reposition_header_cb() if idx == 0 else None)
+        header.geometriesChanged.connect(self._reposition_header_cb)
+        header.setSortIndicatorShown(False)  # 隐藏排序箭头，避免与勾选框重叠
+        self.table.setColumnWidth(0, 36)  # 勾选列稍加宽，容纳勾选框
+        header.setStretchLastSection(False)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSortingEnabled(True)
+        # 确保垂直表头（序号列）可见
+        self.table.verticalHeader().setDefaultSectionSize(28)
+        self.table.verticalHeader().setMinimumWidth(32)
+
+        # 细分隔线 + 选中文字不变白
+        self.table.setStyleSheet("""
+            QTableWidget { gridline-color: #ddd; }
+            QTableWidget::item:selected {
+                color: #000; background: #D6E8FF;
+            }
+            QHeaderView::section {
+                border: none;
+                border-bottom: 1px solid #ccc;
+                border-right: 1px solid #ddd;
+                padding: 3px;
+            }
+        """)
+
+        # 双击行 → 跳转到该标签的首张图片
+        if self._on_jump_to:
+            self.table.cellDoubleClicked.connect(self._on_row_double_clicked)
+        self.table.setToolTip('双击任意行可跳转至该标签的首张图片')
 
         # 填充数据（按 box_count 降序）
         sorted_items = sorted(raw_stats.items(),
@@ -81,55 +126,102 @@ class LabelStatsDialog(QDialog):
         spell_warnings = self._detect_spelling_errors(list(raw_stats.keys()))
 
         for row, (label, info) in enumerate(sorted_items):
-            # 显示名：空标签显示为 (空标签)
-            display_label = label if label else '(空标签)'
-            item0 = QTableWidgetItem(display_label)
-            if not label:
-                item0.setForeground(QColor('#E57373'))
-                item0.setToolTip('标注框存在但标签名为空')
-            self.table.setItem(row, 0, item0)
-            self.table.setItem(row, 1, QTableWidgetItem(str(info['box_count'])))
-            self.table.setItem(row, 2, QTableWidgetItem(str(info['image_count'])))
+            # ── 第 0 列：勾选框（居中） ──
+            cb = QCheckBox()
+            cb.setChecked(label in self._nav_labels)
+            # 勾选框始终可操作，总开关 OFF 仅控制翻页效果
+            cb.toggled.connect(self._on_checkbox_toggled)
+            self._label_cbs[label] = cb
+            container = QWidget()
+            container_layout = QHBoxLayout(container)
+            container_layout.addWidget(cb)
+            container_layout.setAlignment(Qt.AlignCenter)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+            self.table.setCellWidget(row, 0, container)
+            # 占位 item（排序用，空字符串让排序忽略此列）
+            self.table.setItem(row, 0, QTableWidgetItem(''))
 
+            # ── 第 1 列：标签名 ──
+            display_label = label if label else '(空标签)'
+            item1 = QTableWidgetItem(display_label)
+            if not label:
+                item1.setForeground(QColor('#E57373'))
+                item1.setToolTip('标注框存在但标签名为空')
+            self.table.setItem(row, 1, item1)
+
+            # ── 第 2 列：标注框数 ──
+            self.table.setItem(row, 2, QTableWidgetItem(str(info['box_count'])))
+
+            # ── 第 3 列：涉及图片数 ──
+            self.table.setItem(row, 3, QTableWidgetItem(str(info['image_count'])))
+
+            # ── 第 4 列：疑似拼写错误 ──
             similar = spell_warnings.get(label, [])
             similar_str = ', '.join(similar) if similar else ''
-            item = QTableWidgetItem(similar_str)
+            item4 = QTableWidgetItem(similar_str)
             if similar:
-                item.setForeground(QColor('#E57373'))
-                item.setToolTip('建议统一拼写')
-            self.table.setItem(row, 3, item)
-
-            # 【跳转】按钮
-            nav_btn = QPushButton('跳转')
-            nav_btn.label_name = label  # 存真实标签名（含空字符串）
-            nav_btn.clicked.connect(self._on_navigate_clicked)
-            self.table.setCellWidget(row, 4, nav_btn)
-
-        # 双击行 → 跳转到包含该标签的图片
-        if self._on_jump_to:
-            self.table.cellDoubleClicked.connect(self._on_row_double_clicked)
+                item4.setForeground(QColor('#E57373'))
+                item4.setToolTip('建议统一拼写')
+            self.table.setItem(row, 4, item4)
 
         layout.addWidget(self.table)
 
-        # 底部按钮
+        # ── 底部提示 ──
+        hint = QLabel('💡 双击任一行可跳转至该标签的首张图片（对话框将自动关闭）')
+        hint.setStyleSheet('color: #888; padding: 2px 6px; font-size: 12px;')
+        layout.addWidget(hint)
+
+        # ── 底部按钮 ──
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
-        close_btn = QPushButton('关闭')
+        close_btn = QPushButton('确认')
         close_btn.clicked.connect(self.accept)
         btn_layout.addWidget(close_btn)
         layout.addLayout(btn_layout)
 
-    def _on_navigate_clicked(self):
-        """点击【跳转】：激活标签过滤翻页模式。"""
-        button = self.sender()
-        label = button.label_name
-        if self._on_navigate:
-            self._on_navigate(label)
-        self.accept()
+    def get_nav_state(self):
+        """读取对话框当前状态，供 MainWindow 在关闭后调用。
+
+        Returns:
+            (master_on: bool, checked_labels: set[str])
+        """
+        master_on = self._master_cb.isChecked()
+        checked = {label for label, cb in self._label_cbs.items() if cb.isChecked()}
+        return master_on, checked
+
+    # ── 内部回调 ──
+
+    def _on_master_toggled(self, on):
+        """总开关切换：只影响翻页行为，不锁勾选框。"""
+        pass
+
+    def _on_checkbox_toggled(self):
+        """任一勾选框状态变化时：同步更新表头全选勾。"""
+        if not self._label_cbs:
+            return
+        all_checked = all(cb.isChecked() for cb in self._label_cbs.values())
+        self._header_cb.blockSignals(True)
+        self._header_cb.setChecked(all_checked)
+        self._header_cb.blockSignals(False)
+
+    def _on_header_cb_toggled(self, checked):
+        """点击表头全选勾 → 全选/取消全选。"""
+        for cb in self._label_cbs.values():
+            cb.setChecked(checked)
+
+    def _reposition_header_cb(self):
+        """将全选勾选框定位到第 0 列表头中央。"""
+        header = self.table.horizontalHeader()
+        pos = header.sectionViewportPosition(0)
+        size = header.sectionSize(0)
+        cb_size = self._header_cb.sizeHint()
+        self._header_cb.setGeometry(
+            pos + (size - cb_size.width()) // 2,
+            (header.height() - cb_size.height()) // 2,
+            cb_size.width(), cb_size.height())
 
     def _on_row_double_clicked(self, row, _column):
-        """双击行：跳转到该标签所在的第一个张图片。"""
-        # 获取该行对应的真实标签名（从第 0 列取）
+        """双击行：跳转到该标签所在的第一个张图片并关闭对话框。"""
         label = self._row_labels_from_table(row)
         images = self._stats[label]['images']
         if images:
@@ -139,13 +231,10 @@ class LabelStatsDialog(QDialog):
             self.accept()
 
     def _row_labels_from_table(self, visual_row):
-        """获取指定视觉行的真实标签名（row_labels 存的是排序后的数据行）。"""
-        # 由于用了 setSortingEnabled，视觉行可能已乱序，
-        # 直接从第 0 列 text 反查真实 label
-        display = self.table.item(visual_row, 0).text()
+        """获取指定视觉行的真实标签名。"""
+        display = self.table.item(visual_row, 1).text()
         if display == '(空标签)':
             return ''
-        # 从 _stats 里找（避免显示文本和真实名不一致）
         for lbl in self._stats:
             if lbl == display:
                 return lbl
@@ -160,7 +249,7 @@ class LabelStatsDialog(QDialog):
                 if i >= j:
                     continue
                 if not a or not b:
-                    continue  # 跳过空标签
+                    continue
                 ratio = difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
                 if ratio > 0.75:
                     warnings.setdefault(a, []).append(b)
@@ -186,7 +275,6 @@ def scan_label_statistics(img_list, default_save_dir):
         basename = os.path.splitext(os.path.basename(img_path))[0]
         anno_path = None
 
-        # 按优先级查找：XML > TXT > JSON
         if default_save_dir:
             for ext in (XML_EXT, TXT_EXT, JSON_EXT):
                 candidate = os.path.join(default_save_dir, basename + ext)
@@ -209,7 +297,6 @@ def scan_label_statistics(img_list, default_save_dir):
             stats[key]['box_count'] += 1
             stats[key]['images'].add(img_path)
 
-    # 将 set 转为 count
     result = {}
     for label, info in stats.items():
         result[label] = {

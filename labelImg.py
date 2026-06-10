@@ -926,10 +926,10 @@ class MainWindow(QMainWindow, WindowMixin):
         menu = QMenu()
         if anno_path:
             action = menu.addAction('在文件管理器中定位标注文件')
-            action.triggered.connect(lambda p=anno_path: self._open_in_file_manager(p))
+            action.triggered.connect(partial(self._open_in_file_manager, anno_path))
         else:
             action = menu.addAction('在文件管理器中定位图片')
-            action.triggered.connect(lambda p=img_path: self._open_in_file_manager(p))
+            action.triggered.connect(partial(self._open_in_file_manager, img_path))
         menu.exec_(self.file_list_widget.mapToGlobal(point))
 
     def _open_in_file_manager(self, path):

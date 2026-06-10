@@ -151,8 +151,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.cur_img_idx = 0
         self.img_count = len(self.m_img_list)
 
-        # 过滤翻页状态：None / label字符串 / '__empty__'
-        self._nav_filter = None
+        # 跳跃翻页
+        self._nav_labels = set()  # set[str] — 上次勾选的标签集合（持久保留）
+        self._nav_active = False  # 导航模式是否激活（由主开关 + Esc 控制）
         self._label_to_indices = {}
         self._img_label_map = {}  # {img_path: {label: box_count}}
         self._stats_cache = None  # {label: {'box_count': int, 'image_count': int, 'images': set}}
@@ -647,9 +648,6 @@ class MainWindow(QMainWindow, WindowMixin):
         if event.key() == Qt.Key_Control:
             # 按住 Ctrl 时绘制正方形
             self.canvas.set_drawing_shape_to_square(True)
-        elif event.key() == Qt.Key_Escape and self._nav_filter is not None:
-            # Esc 退出过滤翻页模式
-            self._clear_label_filter()
 
     def eventFilter(self, obj, event):
         """在子控件（如 QListWidget、Canvas）消费前拦截快捷键。
@@ -658,15 +656,14 @@ class MainWindow(QMainWindow, WindowMixin):
         按键与逻辑保持解耦。
         """
         if event.type() == QEvent.KeyPress:
-            # 过滤翻页中 Esc → 退出过滤
-            if event.key() == Qt.Key_Escape and self._nav_filter is not None:
-                self._clear_label_filter()
+            if event.key() == Qt.Key_Escape and self._nav_active:
+                self._clear_nav_mode()
                 return True
             shift = event.modifiers() & Qt.ShiftModifier
             action = KEY_BINDINGS.get((event.key(), shift))
             if action is not None:
                 self.canvas.execute_action(action, event)
-                return True  # 吃掉事件，防止子控件继续处理
+                return True
         return super().eventFilter(obj, event)
 
     # 辅助功能 #
@@ -1333,9 +1330,10 @@ class MainWindow(QMainWindow, WindowMixin):
         Converts image counter to string representation.
         """
         base = '[{} / {}]'.format(self.cur_img_idx + 1, self.img_count)
-        if self._nav_filter is not None:
-            label_display = self._nav_filter if self._nav_filter else '(空标签)'
-            base += ' [筛选: {}]'.format(label_display)
+        if self._nav_active:
+            labels_shown = sorted(self._nav_labels, key=lambda x: (x == '', x))
+            display = ', '.join(l if l else '(空标签)' for l in labels_shown)
+            base += ' [导航: {}]'.format(display)
         return base
 
     def show_bounding_box_from_annotation_file(self, file_path, replace=True):
@@ -1475,7 +1473,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self._refresh_all_file_colors()
             # 缓存已失效，下次打开统计面板时重新扫描
             self._stats_cache = None
-            self._clear_label_filter()
+            self._clear_nav_mode()
             self._build_label_index()
 
         if self.file_path is not None:
@@ -1577,7 +1575,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_list_widget.clear()
         self.m_img_list = self.scan_all_images(dir_path)
         self.img_count = len(self.m_img_list)
-        self._clear_label_filter()
+        self._clear_nav_mode()
         self._build_label_index()
         self.open_next_image()
         for imgPath in self.m_img_list:
@@ -1629,9 +1627,9 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.file_path is None:
             return
 
-        # 过滤翻页模式
-        if self._nav_filter is not None:
-            self._advance_in_filter(-1)
+        # 跳跃翻页模式
+        if self._nav_active:
+            self._advance_in_nav(-1)
             return
 
         if self.cur_img_idx - 1 >= 0:
@@ -1659,9 +1657,9 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.m_img_list:
             return
 
-        # 过滤翻页模式
-        if self._nav_filter is not None:
-            self._advance_in_filter(+1)
+        # 跳跃翻页模式
+        if self._nav_active:
+            self._advance_in_nav(+1)
             return
 
         filename = None
@@ -1973,41 +1971,25 @@ class MainWindow(QMainWindow, WindowMixin):
 
         dialog = LabelStatsDialog(self._stats_cache, self,
                                   on_jump_to=self.load_file,
-                                  on_navigate=self._activate_label_filter,
-                                  total_img_count=len(self.m_img_list))
+                                  total_img_count=len(self.m_img_list),
+                                  nav_labels=self._nav_labels,
+                                  master_on=self._nav_active)
         dialog.exec_()
-
-    # ---------------------------------------------------------------------------
-    # 过滤翻页（标签导航）
-    # ---------------------------------------------------------------------------
-
-    def _activate_label_filter(self, label_name):
-        """用户点击【导航】：激活过滤翻页模式。
-        如果当前已在过滤该标签 → 清除过滤（即 toggle）。
-        如果当前图片不包含该标签，自动跳到第一张匹配的图片。
-        """
-        # 点击已激活的标签 → 清除过滤
-        if self._nav_filter == label_name:
-            self._clear_label_filter()
-            return
-
-        self._nav_filter = label_name
+        master_on, checked = dialog.get_nav_state()
+        self._nav_labels = checked  # 始终保存勾选状态，不管主开关
+        self._nav_active = master_on
+        if master_on and checked:
+            self._jump_to_first_nav_image()
         self._update_title_counter()
 
-        # 当前图片没有该标签 → 跳到第一张匹配的
-        indices = self._label_to_indices.get(label_name, [])
-        if indices and self.cur_img_idx not in indices:
-            target_idx = indices[0]
-            self.cur_img_idx = target_idx
-            filename = self.m_img_list[self.cur_img_idx]
-            if filename:
-                self.load_file(filename)
-                self._update_title_counter()
+    # ---------------------------------------------------------------------------
+    # 跳跃翻页（按标签导航）
+    # ---------------------------------------------------------------------------
 
-    def _clear_label_filter(self):
-        """退出过滤翻页模式，恢复普通翻页。"""
-        if self._nav_filter is not None:
-            self._nav_filter = None
+    def _clear_nav_mode(self):
+        """退出跳跃翻页模式，恢复普通翻页。保留勾选状态。"""
+        if self._nav_active:
+            self._nav_active = False
             self._update_title_counter()
 
     def _update_title_counter(self):
@@ -2017,39 +1999,58 @@ class MainWindow(QMainWindow, WindowMixin):
             self.setWindowTitle(__appname__ + ' ' + self.file_path + ' ' + counter)
             self.file_dock.setWindowTitle(self._file_dock_base + ' ' + counter)
 
-    def _advance_in_filter(self, direction):
-        """在过滤翻页中前进 (direction=+1) 或后退 (direction=-1)。"""
-        indices = self._label_to_indices.get(self._nav_filter, [])
-        if not indices:
-            self._clear_label_filter()
-            self.status('该标签没有匹配的图片', 3000)
+    def _jump_to_first_nav_image(self):
+        """跳到第一张包含任意勾选标签的图片。"""
+        if not self._nav_labels or not self._label_to_indices:
+            return
+        all_indices = sorted(set().union(
+            *(self._label_to_indices.get(lbl, []) for lbl in self._nav_labels)
+        ))
+        if all_indices and self.cur_img_idx not in all_indices:
+            target_idx = all_indices[0]
+            self.cur_img_idx = target_idx
+            filename = self.m_img_list[self.cur_img_idx]
+            if filename:
+                self.load_file(filename)
+                self._update_title_counter()
+
+    def _advance_in_nav(self, direction):
+        """在跳跃翻页中前进 (direction=+1) 或后退 (direction=-1)。
+        计算所有勾选标签的图片索引并集，用 bisect 定位目标位置。
+        """
+        if not self._nav_labels:
+            self._clear_nav_mode()
+            return
+
+        # 合并所有勾选标签的索引，去重排序
+        all_indices = sorted(set().union(
+            *(self._label_to_indices.get(lbl, []) for lbl in self._nav_labels)
+        ))
+        if not all_indices:
+            self._clear_nav_mode()
+            self.status('所选标签均无匹配图片', 3000)
             return
 
         cur = self.cur_img_idx
-        # 二分查找当前位置在过滤列表中的索引
         import bisect
-        pos = bisect.bisect_left(indices, cur)
+        pos = bisect.bisect_left(all_indices, cur)
 
         if direction > 0:
-            # 前进：找下一个严格大于 cur 的索引
             next_pos = pos
-            while next_pos < len(indices) and indices[next_pos] <= cur:
+            while next_pos < len(all_indices) and all_indices[next_pos] <= cur:
                 next_pos += 1
-            if next_pos < len(indices):
-                target_idx = indices[next_pos]
+            if next_pos < len(all_indices):
+                target_idx = all_indices[next_pos]
             else:
-                # 到尾了，回到第一个
-                target_idx = indices[0]
+                target_idx = all_indices[0]
         else:
-            # 后退：找上一个严格小于 cur 的索引
             prev_pos = pos - 1
-            while prev_pos >= 0 and indices[prev_pos] >= cur:
+            while prev_pos >= 0 and all_indices[prev_pos] >= cur:
                 prev_pos -= 1
             if prev_pos >= 0:
-                target_idx = indices[prev_pos]
+                target_idx = all_indices[prev_pos]
             else:
-                # 到头了，回到最后一个
-                target_idx = indices[-1]
+                target_idx = all_indices[-1]
 
         if target_idx != cur:
             self.cur_img_idx = target_idx
@@ -2058,10 +2059,11 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.load_file(filename)
                 self._update_title_counter()
         else:
-            if len(indices) == 1:
-                self.status('该标签仅此 1 张图片，无法翻页', 3000)
+            total = len(all_indices)
+            if total == 1:
+                self.status('所选标签仅此 1 张图片，无法翻页', 3000)
             else:
-                self.status('过滤导航：已在首/尾，循环回到当前', 3000)
+                self.status('跳跃导航：已在首/尾，循环回到当前', 3000)
 
     def _build_label_index(self):
         """全量扫描数据集，构建索引和缓存：_label_to_indices / _img_label_map / _stats_cache。"""

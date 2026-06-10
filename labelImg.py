@@ -332,6 +332,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.file_list_widget = QListWidget()
         self.file_list_widget.itemDoubleClicked.connect(self.file_item_double_clicked)
+        self.file_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.file_list_widget.customContextMenuRequested.connect(
+            self._pop_file_list_menu)
         file_list_layout = QVBoxLayout()
         file_list_layout.setContentsMargins(0, 0, 0, 0)
         file_list_layout.addWidget(self.file_list_widget)
@@ -899,6 +902,46 @@ class MainWindow(QMainWindow, WindowMixin):
         filename = self.m_img_list[self.cur_img_idx]
         if filename:
             self.load_file(filename)
+
+    # 右键菜单：在文件管理器中定位标注文件
+    def _find_annotation_path(self, img_path):
+        """查找图片对应的标注文件路径（XML / TXT / JSON）。"""
+        for ext in (XML_EXT, TXT_EXT, JSON_EXT):
+            if self.default_save_dir:
+                basename = os.path.splitext(os.path.basename(img_path))[0]
+                anno_path = os.path.join(self.default_save_dir, basename + ext)
+            else:
+                anno_path = os.path.splitext(img_path)[0] + ext
+            if os.path.isfile(anno_path):
+                return anno_path
+        return None
+
+    def _pop_file_list_menu(self, point):
+        item = self.file_list_widget.itemAt(point)
+        if not item:
+            return
+        img_path = ustr(item.data(Qt.UserRole))
+        anno_path = self._find_annotation_path(img_path)
+
+        menu = QMenu()
+        if anno_path:
+            action = menu.addAction('在文件管理器中定位标注文件')
+            action.triggered.connect(lambda p=anno_path: self._open_in_file_manager(p))
+        else:
+            action = menu.addAction('在文件管理器中定位图片')
+            action.triggered.connect(lambda p=img_path: self._open_in_file_manager(p))
+        menu.exec_(self.file_list_widget.mapToGlobal(point))
+
+    def _open_in_file_manager(self, path):
+        """在系统文件管理器中打开并选中文件。"""
+        import subprocess
+        path = os.path.normpath(path)
+        if platform.system() == 'Windows':
+            subprocess.Popen(['explorer', '/select,', path])
+        elif platform.system() == 'Darwin':
+            subprocess.Popen(['open', '-R', path])
+        else:
+            subprocess.Popen(['xdg-open', os.path.dirname(path)])
 
     # Chris 添加：difficult 标记
     def button_state(self, item=None):

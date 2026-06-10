@@ -17,11 +17,15 @@ class LabelDialog(QDialog):
         self.edit.setValidator(label_validator())
         self.edit.editingFinished.connect(self.post_process)
 
-        model = QStringListModel()
-        model.setStringList(list_item)
-        completer = QCompleter()
-        completer.setModel(model)
-        self.edit.setCompleter(completer)
+        # 自动补全：大小写不敏感、包含匹配
+        items = list_item or []
+        self._completer = QCompleter(items, self)
+        self._completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._completer.setFilterMode(Qt.MatchContains)
+        self._completer.setCompletionMode(QCompleter.PopupCompletion)
+        # 从补全列表中选中（点击或回车）→ 自动确认并关闭对话框
+        self._completer.activated[str].connect(self.accept)
+        self.edit.setCompleter(self._completer)
 
         self.button_box = bb = BB(BB.Ok | BB.Cancel, Qt.Horizontal, self)
         bb.button(BB.Ok).setIcon(new_icon('done'))
@@ -32,16 +36,21 @@ class LabelDialog(QDialog):
         layout = QVBoxLayout()
         layout.addWidget(bb, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.edit)
-
-        if list_item is not None and len(list_item) > 0:
-            self.list_widget = QListWidget(self)
-            for item in list_item:
-                self.list_widget.addItem(item)
-            self.list_widget.itemClicked.connect(self.list_item_click)
-            self.list_widget.itemDoubleClicked.connect(self.list_item_double_click)
-            layout.addWidget(self.list_widget)
-
         self.setLayout(layout)
+
+        self._needs_completer = False  # pop_up 中置 True，showEvent 时自动弹出补全
+
+    def showEvent(self, event):
+        """对话框显示后自动弹出补全候选。"""
+        super().showEvent(event)
+        if event.isAccepted() and self._needs_completer:
+            self._needs_completer = False
+            QTimer.singleShot(150, self._show_completer)
+
+    def _show_completer(self):
+        """弹出补全候选（延迟 150ms 让对话框先完成渲染）。"""
+        self._completer.setCompletionPrefix('')
+        self._completer.complete()
 
     def validate(self):
         if trimmed(self.edit.text()):
@@ -59,6 +68,8 @@ class LabelDialog(QDialog):
         self.edit.setText(text)
         self.edit.setSelection(0, len(text))
         self.edit.setFocus(Qt.PopupFocusReason)
+        # 标记：showEvent 时自动弹出补全候选
+        self._needs_completer = True
         if move:
             cursor_pos = QCursor.pos()
 
@@ -81,11 +92,3 @@ class LabelDialog(QDialog):
                 cursor_pos.setY(max_global.y())
             self.move(cursor_pos)
         return trimmed(self.edit.text()) if self.exec_() else None
-
-    def list_item_click(self, t_qlist_widget_item):
-        text = trimmed(t_qlist_widget_item.text())
-        self.edit.setText(text)
-
-    def list_item_double_click(self, t_qlist_widget_item):
-        self.list_item_click(t_qlist_widget_item)
-        self.validate()

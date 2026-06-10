@@ -1143,9 +1143,18 @@ class MainWindow(QMainWindow, WindowMixin):
         position 必须是全局坐标。
         """
         if not self.use_default_label_checkbox.isChecked() or not self.default_label_text_line.text():
-            if len(self.label_hist) > 0:
-                self.label_dialog = LabelDialog(
-                    parent=self, list_item=self.label_hist)
+            # 下拉候选：标注文件中已有的标签（删框保存后自动消失）
+            #          + 最近 10 个尚未保存过的新标签（方便新建时选用）
+            annotation_labels = sorted(self._label_to_indices.keys())
+            recent_unsaved = []
+            for label in reversed(self.label_hist):
+                if label not in annotation_labels:
+                    recent_unsaved.append(label)
+                    if len(recent_unsaved) >= 10:
+                        break
+            all_labels = list(annotation_labels) + recent_unsaved
+            self.label_dialog = LabelDialog(
+                parent=self, list_item=all_labels)
 
             # 单类别模式（PR#106）
             if self.single_class_mode.isChecked() and self.lastLabel:
@@ -1172,11 +1181,20 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.actions.editMode.setEnabled(True)
             self.set_dirty()
 
-            if text not in self.label_hist:
-                self.label_hist.append(text)
+            # 加入历史：大小写去重 + 最近最多 100 条
+            self._add_to_label_hist(text)
         else:
             # self.canvas.undoLastLine()
             self.canvas.reset_all_lines()
+
+    def _add_to_label_hist(self, text):
+        """将标签加入历史记录（大小写去重，保留最近 100 条）。"""
+        # 先移除同名的（大小写不敏感），保证最新拼写排在最后
+        self.label_hist = [l for l in self.label_hist if l.lower() != text.lower()]
+        self.label_hist.append(text)
+        # 保留最近 100 条
+        if len(self.label_hist) > 100:
+            self.label_hist = self.label_hist[-100:]
 
     def scroll_request(self, delta, orientation):
         units = - delta / (8 * 15)

@@ -1,10 +1,12 @@
 
+
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 
 from libs.shape import Shape
 from libs.utils import distance
+from libs.keyAccelerator import KeyAccelerator
 
 # ── Key Binding Table ──────────────────────────────────
 # (key_code, modifier_mask) → action_name
@@ -77,11 +79,12 @@ class Canvas(QWidget):
         # Keyboard corner selection mode (-1 = whole shape / translate, 0-3 = specific corner)
         self.corner_idx = -1
 
-        # Multi-key arrow movement (hold Left+Down for diagonal, etc.)
+        # 方向键组合移动（按下 Left+Down 可斜向移动）
         self._pressed_keys = set()
         self._move_timer = QTimer(self)
-        self._move_timer.setInterval(50)  # ~20 fps continuous move
+        self._move_timer.setInterval(50)  # ~20 fps 持续移动
         self._move_timer.timeout.connect(self._process_held_keys)
+        self._key_accel = KeyAccelerator()
 
     def set_drawing_color(self, qcolor):
         self.drawing_line_color = qcolor
@@ -693,10 +696,13 @@ class Canvas(QWidget):
             self.finalise()
         elif key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down) and self.selected_shape:
             if not ev.isAutoRepeat():
+                was_empty = not self._pressed_keys
                 self._pressed_keys.add(key)
+                if was_empty:
+                    self._key_accel.start()
                 if not self._move_timer.isActive():
                     self._move_timer.start()
-                self._process_held_keys()  # Immediate first move, no delay
+                self._process_held_keys()  # 立即移动一次，不用等定时器
         elif key == Qt.Key_Escape:
             self._reset_corner_mode()
         else:
@@ -712,6 +718,7 @@ class Canvas(QWidget):
                 self._pressed_keys.discard(key)
                 if not self._pressed_keys:
                     self._move_timer.stop()
+                    self._key_accel.stop()
 
     def _cycle_corner(self, direction):
         """Cycle selection among corners using data-driven transitions.
@@ -780,22 +787,24 @@ class Canvas(QWidget):
                 self.repaint()
 
     def _process_held_keys(self):
-        """Timer callback: combine all held arrow keys into one diagonal step."""
+        """定时器回调：将当前所有按下的方向键合并为一个斜向步长。"""
         if not self.selected_shape:
             self._pressed_keys.clear()
             self._move_timer.stop()
             return
-        dx = 0.0
-        dy = 0.0
+
+        step_mag = self._key_accel.step()
+        dx = 0
+        dy = 0
         if Qt.Key_Left in self._pressed_keys:
-            dx -= 1.0
+            dx -= step_mag
         if Qt.Key_Right in self._pressed_keys:
-            dx += 1.0
+            dx += step_mag
         if Qt.Key_Up in self._pressed_keys:
-            dy -= 1.0
+            dy -= step_mag
         if Qt.Key_Down in self._pressed_keys:
-            dy += 1.0
-        if dx == 0.0 and dy == 0.0:
+            dy += step_mag
+        if dx == 0 and dy == 0:
             return
         self._apply_move_step(QPointF(dx, dy))
 

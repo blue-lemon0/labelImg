@@ -74,8 +74,8 @@ class Canvas(QWidget):
         # 控件选项
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.WheelFocus)
-        self.verified = False
         self.draw_square = False
+        self._verified = False
 
         # 平移用
         self.pan_initial_pos = QPoint()
@@ -92,6 +92,28 @@ class Canvas(QWidget):
 
         # 背景自动填充（只需设置一次，无需每帧重复）
         self.setAutoFillBackground(True)
+
+        # 初始化验证状态背景色
+        self._update_verified_visual()
+
+    @property
+    def verified(self):
+        return self._verified
+
+    @verified.setter
+    def verified(self, value):
+        if self._verified != value:
+            self._verified = value
+            self._update_verified_visual()
+
+    def _update_verified_visual(self):
+        """更新画布背景色以反映验证状态（仅在状态变化时调用）。"""
+        pal = self.palette()
+        if self._verified:
+            pal.setColor(self.backgroundRole(), QColor(184, 239, 38, 128))
+        else:
+            pal.setColor(self.backgroundRole(), QColor(232, 232, 232, 255))
+        self.setPalette(pal)
 
     def set_drawing_color(self, qcolor):
         self.drawing_line_color = qcolor
@@ -572,16 +594,6 @@ class Canvas(QWidget):
             p.setPen(QColor(0, 0, 0))
             p.drawLine(int(self.prev_point.x()), 0, int(self.prev_point.x()), int(self.pixmap.height()))
             p.drawLine(0, int(self.prev_point.y()), int(self.pixmap.width()), int(self.prev_point.y()))
-
-        # 设置画布背景色（表示验证状态）
-        if self.verified:
-            pal = self.palette()
-            pal.setColor(self.backgroundRole(), QColor(184, 239, 38, 128))
-            self.setPalette(pal)
-        else:
-            pal = self.palette()
-            pal.setColor(self.backgroundRole(), QColor(232, 232, 232, 255))
-            self.setPalette(pal)
 
         p.end()
 

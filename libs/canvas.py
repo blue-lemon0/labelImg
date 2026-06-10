@@ -8,27 +8,28 @@ from libs.shape import Shape
 from libs.utils import distance
 from libs.keyAccelerator import KeyAccelerator
 
-# ── Key Binding Table ──────────────────────────────────
+# ── 按键绑定表 ──────────────────────────────────────────
 # (key_code, modifier_mask) → action_name
-# Decouples physical keys from logical actions.
-# Future: load from user config file.
+# 将物理按键与逻辑操作解耦。
+# 后续可改为从用户配置加载。
 KEY_BINDINGS = {
-    (Qt.Key_C, Qt.NoModifier):    'corner_cw',
-    (Qt.Key_Z, Qt.NoModifier):    'corner_ccw',
-    (Qt.Key_X, Qt.NoModifier):    'shape_next',
-    (Qt.Key_X, Qt.ShiftModifier): 'shape_prev',
+    (Qt.Key_C, Qt.NoModifier):    'corner_cw',      # C 键 → 顺时针切换角点
+    (Qt.Key_Z, Qt.NoModifier):    'corner_ccw',     # Z 键 → 逆时针切换角点
+    (Qt.Key_X, Qt.NoModifier):    'shape_next',     # X 键 → 选中下一个标注
+    (Qt.Key_X, Qt.ShiftModifier): 'shape_prev',     # Shift+X → 选中上一个标注
 }
 
-CURSOR_DEFAULT = Qt.ArrowCursor
-CURSOR_POINT = Qt.PointingHandCursor
-CURSOR_DRAW = Qt.CrossCursor
-CURSOR_MOVE = Qt.ClosedHandCursor
-CURSOR_GRAB = Qt.OpenHandCursor
+CURSOR_DEFAULT = Qt.ArrowCursor         # 默认箭头
+CURSOR_POINT = Qt.PointingHandCursor     # 指向顶点
+CURSOR_DRAW = Qt.CrossCursor             # 绘制中
+CURSOR_MOVE = Qt.ClosedHandCursor        # 拖拽移动
+CURSOR_GRAB = Qt.OpenHandCursor          # 悬浮可抓取
 
 # class Canvas(QGLWidget):
 
 
 class Canvas(QWidget):
+    """标注画布：负责图片渲染、标注绘制、鼠标/键盘交互。"""
     zoomRequest = pyqtSignal(int)
     lightRequest = pyqtSignal(int)
     scrollRequest = pyqtSignal(int, int)
@@ -43,15 +44,18 @@ class Canvas(QWidget):
 
     def __init__(self, *args, **kwargs):
         super(Canvas, self).__init__(*args, **kwargs)
-        # Initialise local state.
+        # 窗口引用缓存，避免重复调用 self.parent().window()
+        self._main_window = None
+
+        # 初始状态
         self.mode = self.EDIT
-        self.shapes = []
-        self.current = None
-        self.selected_shape = None  # save the selected shape here
-        self.selected_shape_copy = None
+        self.shapes = []                          # 所有已完成标注
+        self.current = None                       # 正在绘制的标注
+        self.selected_shape = None                # 当前选中的标注
+        self.selected_shape_copy = None            # 右键拖拽时的副本
         self.drawing_line_color = QColor(0, 0, 255)
         self.drawing_rect_color = QColor(0, 0, 255)
-        self.line = Shape(line_color=self.drawing_line_color)
+        self.line = Shape(line_color=self.drawing_line_color)  # 绘制中的虚拟线
         self.prev_point = QPointF()
         self.offsets = QPointF(), QPointF()
         self.scale = 1.0
@@ -65,18 +69,18 @@ class Canvas(QWidget):
         self.h_vertex = None
         self._painter = QPainter()
         self._cursor = CURSOR_DEFAULT
-        # Menus:
+        # 右键菜单
         self.menus = (QMenu(), QMenu())
-        # Set widget options.
+        # 控件选项
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.WheelFocus)
         self.verified = False
         self.draw_square = False
 
-        # initialisation for panning
+        # 平移用
         self.pan_initial_pos = QPoint()
 
-        # Keyboard corner selection mode (-1 = whole shape / translate, 0-3 = specific corner)
+        # 键盘角点选择模式（-1=整体移动/平移，0-3=对应角点）
         self.corner_idx = -1
 
         # 方向键组合移动（按下 Left+Down 可斜向移动）
@@ -86,77 +90,89 @@ class Canvas(QWidget):
         self._move_timer.timeout.connect(self._process_held_keys)
         self._key_accel = KeyAccelerator()
 
+        # 背景自动填充（只需设置一次，无需每帧重复）
+        self.setAutoFillBackground(True)
+
     def set_drawing_color(self, qcolor):
         self.drawing_line_color = qcolor
         self.drawing_rect_color = qcolor
 
     def enterEvent(self, ev):
+        """鼠标进入画布时恢复当前光标样式。"""
         self.override_cursor(self._cursor)
 
     def leaveEvent(self, ev):
+        """鼠标离开画布时恢复系统光标。"""
         self.restore_cursor()
 
     def focusOutEvent(self, ev):
+        """焦点移出时恢复系统光标。"""
         self.restore_cursor()
 
     def isVisible(self, shape):
         return self.visible.get(shape, True)
 
     def drawing(self):
+        """是否处于绘制模式。"""
         return self.mode == self.CREATE
 
     def editing(self):
+        """是否处于编辑模式。"""
         return self.mode == self.EDIT
 
     def set_editing(self, value=True):
+        """切换编辑/绘制模式。"""
         self.mode = self.EDIT if value else self.CREATE
-        if not value:  # Create
+        if not value:  # 进入绘制模式
             self.un_highlight()
             self.de_select_shape()
         self.prev_point = QPointF()
         self.repaint()
 
     def un_highlight(self, shape=None):
+        """清除指定标注（或所有标注）的高亮。"""
         if shape == None or shape == self.h_shape:
             if self.h_shape:
                 self.h_shape.highlight_clear()
             self.h_vertex = self.h_shape = None
 
     def selected_vertex(self):
+        """是否选中了某个顶点。"""
         return self.h_vertex is not None
 
     def mouseMoveEvent(self, ev):
-        """Update line with last point and current coordinates."""
+        """鼠标移动：更新绘制辅助线、拖拽标注/顶点、平移背景。"""
         pos = self.transform_pos(ev.pos())
 
-        # Update coordinates in status bar if image is opened
-        window = self.parent().window()
-        if window.file_path is not None:
-            self.parent().window().label_coordinates.setText(
+        # 缓存主窗口引用
+        if self._main_window is None:
+            self._main_window = self.parent().window()
+        win = self._main_window
+
+        # 更新状态栏坐标
+        if win.file_path is not None:
+            win.label_coordinates.setText(
                 'X: %d; Y: %d' % (pos.x(), pos.y()))
 
-        # Polygon drawing.
+        # ── 绘制模式 ──
         if self.drawing():
             self.override_cursor(CURSOR_DRAW)
             if self.current:
-                # Display annotation width and height while drawing
+                # 显示标注宽高
                 current_width = abs(self.current[0].x() - pos.x())
                 current_height = abs(self.current[0].y() - pos.y())
-                self.parent().window().label_coordinates.setText(
+                win.label_coordinates.setText(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
 
                 color = self.drawing_line_color
                 if self.out_of_pixmap(pos):
-                    # Don't allow the user to draw outside the pixmap.
-                    # Clip the coordinates to 0 or max,
-                    # if they are outside the range [0, max]
+                    # 不允许画到图片外，将坐标裁剪到边界内
                     size = self.pixmap.size()
                     clipped_x = min(max(0, pos.x()), size.width())
                     clipped_y = min(max(0, pos.y()), size.height())
                     pos = QPointF(clipped_x, clipped_y)
                 elif len(self.current) > 1 and self.close_enough(pos, self.current[0]):
-                    # Attract line to starting point and colorise to alert the
-                    # user:
+                    # 靠近起点时吸附，变色提示用户可闭合
                     pos = self.current[0]
                     color = self.current.line_color
                     self.override_cursor(CURSOR_POINT)
@@ -181,7 +197,7 @@ class Canvas(QWidget):
             self.repaint()
             return
 
-        # Polygon copy moving.
+        # ── 右键拖拽复制 ──
         if Qt.RightButton & ev.buttons():
             if self.selected_shape_copy and self.prev_point:
                 self.override_cursor(CURSOR_MOVE)
@@ -192,19 +208,19 @@ class Canvas(QWidget):
                 self.repaint()
             return
 
-        # Polygon/Vertex moving.
+        # ── 左键拖拽移动标注/顶点 ──
         if Qt.LeftButton & ev.buttons():
             if self.selected_vertex():
                 self.bounded_move_vertex(pos)
                 self.shapeMoved.emit()
                 self.repaint()
 
-                # Display annotation width and height while moving vertex
+                # 拖动顶点时显示宽高
                 point1 = self.h_shape[1]
                 point3 = self.h_shape[3]
                 current_width = abs(point1.x() - point3.x())
                 current_height = abs(point1.y() - point3.y())
-                self.parent().window().label_coordinates.setText(
+                win.label_coordinates.setText(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
             elif self.selected_shape and self.prev_point:
                 self.override_cursor(CURSOR_MOVE)
@@ -212,30 +228,26 @@ class Canvas(QWidget):
                 self.shapeMoved.emit()
                 self.repaint()
 
-                # Display annotation width and height while moving shape
+                # 移动标注时显示宽高
                 point1 = self.selected_shape[1]
                 point3 = self.selected_shape[3]
                 current_width = abs(point1.x() - point3.x())
                 current_height = abs(point1.y() - point3.y())
-                self.parent().window().label_coordinates.setText(
+                win.label_coordinates.setText(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
             else:
-                # pan
+                # 左键拖拽空白区域 → 平移
                 delta = ev.pos() - self.pan_initial_pos
                 self.scrollRequest.emit(delta.x(), Qt.Horizontal)
                 self.scrollRequest.emit(delta.y(), Qt.Vertical)
                 self.update()
             return
 
-        # Just hovering over the canvas, 2 possibilities:
-        # - Highlight shapes
-        # - Highlight vertex
-        # Update shape/vertex fill and tooltip value accordingly.
+        # ── 纯悬浮（无按键）→ 高亮标注或顶点 ──
         self.setToolTip("Image")
         priority_list = self.shapes + ([self.selected_shape] if self.selected_shape else [])
         for shape in reversed([s for s in priority_list if self.isVisible(s)]):
-            # Look for a nearby vertex to highlight. If that fails,
-            # check if we happen to be inside a shape.
+            # 先看是否靠近某个顶点，再看是否在标注区域内
             index = shape.nearest_vertex(pos, self.epsilon)
             if index is not None:
                 if self.selected_vertex():
@@ -252,15 +264,15 @@ class Canvas(QWidget):
                 self.override_cursor(CURSOR_GRAB)
                 self.update()
 
-                # Display annotation width and height while hovering inside
+                # 悬浮时在状态栏显示标注宽高
                 point1 = self.h_shape[1]
                 point3 = self.h_shape[3]
                 current_width = abs(point1.x() - point3.x())
                 current_height = abs(point1.y() - point3.y())
-                self.parent().window().label_coordinates.setText(
+                win.label_coordinates.setText(
                         'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
                 break
-        else:  # Nothing found, clear highlights, reset state.
+        else:  # 什么都没碰到 → 清除高亮，重置光标
             if self.h_shape:
                 self.h_shape.highlight_clear()
                 self.update()
@@ -268,6 +280,7 @@ class Canvas(QWidget):
             self.override_cursor(CURSOR_DEFAULT)
 
     def mousePressEvent(self, ev):
+        """鼠标按下：左键绘制/选中/平移，右键选中标注。"""
         pos = self.transform_pos(ev.pos())
 
         if ev.button() == Qt.LeftButton:
@@ -278,7 +291,7 @@ class Canvas(QWidget):
                 self.prev_point = pos
 
                 if selection is None:
-                    # pan
+                    # 空白区域 → 平移
                     QApplication.setOverrideCursor(QCursor(Qt.OpenHandCursor))
                     self.pan_initial_pos = ev.pos()
 
@@ -288,12 +301,13 @@ class Canvas(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, ev):
+        """鼠标释放：右键弹出菜单，左键结束拖拽。"""
         if ev.button() == Qt.RightButton:
             menu = self.menus[bool(self.selected_shape_copy)]
             self.restore_cursor()
             if not menu.exec_(self.mapToGlobal(ev.pos()))\
                and self.selected_shape_copy:
-                # Cancel the move by deleting the shadow copy.
+                # 取消移动：删掉副本
                 self.selected_shape_copy = None
                 self.repaint()
         elif ev.button() == Qt.LeftButton and self.selected_shape:
@@ -306,14 +320,13 @@ class Canvas(QWidget):
             if self.drawing():
                 self.handle_drawing(pos)
             else:
-                # pan
+                # 结束平移
                 QApplication.restoreOverrideCursor()
 
     def end_move(self, copy=False):
+        """结束右键拖拽移动：确认或取消。"""
         assert self.selected_shape and self.selected_shape_copy
         shape = self.selected_shape_copy
-        # del shape.fill_color
-        # del shape.line_color
         if copy:
             self.shapes.append(shape)
             self.selected_shape.selected = False
@@ -324,15 +337,17 @@ class Canvas(QWidget):
         self.selected_shape_copy = None
 
     def hide_background_shapes(self, value):
+        """设置是否隐藏非选中标注。"""
         self.hide_background = value
         if self.selected_shape:
-            # Only hide other shapes if there is a current selection.
-            # Otherwise the user will not be able to select a shape.
+            # 有选中标注时才隐藏其他标注，否则用户无法选中
             self.set_hiding(True)
             self.repaint()
 
     def handle_drawing(self, pos):
+        """处理绘制模式下左键点击：添加点或闭合标注。"""
         if self.current and self.current.reach_max_points() is False:
+            # 矩形模式下，第二个点确定对角 → 自动补全四个顶点
             init_pos = self.current[0]
             min_x = init_pos.x()
             min_y = init_pos.y()
@@ -352,19 +367,21 @@ class Canvas(QWidget):
             self.update()
 
     def set_hiding(self, enable=True):
+        """根据 hide_background 开关设置背景隐藏标志。"""
         self._hide_background = self.hide_background if enable else False
 
     def can_close_shape(self):
+        """是否可以闭合当前标注（绘制模式且至少 3 个点）。"""
         return self.drawing() and self.current and len(self.current) > 2
 
     def mouseDoubleClickEvent(self, ev):
-        # We need at least 4 points here, since the mousePress handler
-        # adds an extra one before this handler is called.
+        """双击闭合标注（至少需要 4 个点，因为 press 事件已加了一个点）。"""
         if self.can_close_shape() and len(self.current) > 3:
             self.current.pop_point()
             self.finalise()
 
     def select_shape(self, shape):
+        """选中指定标注。"""
         self.de_select_shape()
         shape.selected = True
         self.selected_shape = shape
@@ -373,9 +390,9 @@ class Canvas(QWidget):
         self.update()
 
     def select_shape_point(self, point):
-        """Select the first shape created which contains this point."""
+        """选中包含 point 的第一个标注（按创建顺序逆序）。"""
         self.de_select_shape()
-        if self.selected_vertex():  # A vertex is marked for selection.
+        if self.selected_vertex():  # 先看是否选中了顶点
             index, shape = self.h_vertex, self.h_shape
             shape.highlight_vertex(index, shape.MOVE_VERTEX)
             self.select_shape(shape)
@@ -388,6 +405,7 @@ class Canvas(QWidget):
         return None
 
     def calculate_offsets(self, shape, point):
+        """计算鼠标在标注内的偏移量，用于后续拖拽。"""
         rect = shape.bounding_rect()
         x1 = rect.x() - point.x()
         y1 = rect.y() - point.y()
@@ -396,9 +414,8 @@ class Canvas(QWidget):
         self.offsets = QPointF(x1, y1), QPointF(x2, y2)
 
     def snap_point_to_canvas(self, x, y):
-        """
-        Moves a point x,y to within the boundaries of the canvas.
-        :return: (x,y,snapped) where snapped is True if x or y were changed, False if not.
+        """将 (x,y) 约束到图片边界内。
+        :return: (x, y, snapped) 其中 snapped 表示是否被修正过。
         """
         if x < 0 or x > self.pixmap.width() or y < 0 or y > self.pixmap.height():
             x = max(x, 0)
@@ -410,6 +427,7 @@ class Canvas(QWidget):
         return x, y, False
 
     def bounded_move_vertex(self, pos):
+        """鼠标拖拽顶点：保持相邻顶点联动以维持矩形。"""
         index, shape = self.h_vertex, self.h_shape
         point = shape[index]
         if self.out_of_pixmap(pos):
@@ -446,8 +464,9 @@ class Canvas(QWidget):
         shape.move_vertex_by(left_index, left_shift)
 
     def bounded_move_shape(self, shape, pos):
+        """鼠标拖拽整个标注：保持其不超出图片边界。"""
         if self.out_of_pixmap(pos):
-            return False  # No need to move
+            return False  # 无需移动
         o1 = pos + self.offsets[0]
         if self.out_of_pixmap(o1):
             pos -= QPointF(min(0, o1.x()), min(0, o1.y()))
@@ -455,11 +474,6 @@ class Canvas(QWidget):
         if self.out_of_pixmap(o2):
             pos += QPointF(min(0, self.pixmap.width() - o2.x()),
                            min(0, self.pixmap.height() - o2.y()))
-        # The next line tracks the new position of the cursor
-        # relative to the shape, but also results in making it
-        # a bit "shaky" when nearing the border and allows it to
-        # go outside of the shape's area for some reason. XXX
-        # self.calculateOffsets(self.selectedShape, pos)
         dp = pos - self.prev_point
         if dp:
             shape.move_by(dp)
@@ -468,6 +482,7 @@ class Canvas(QWidget):
         return False
 
     def de_select_shape(self):
+        """取消选中当前标注。"""
         if self.selected_shape:
             self.selected_shape.selected = False
             self.selected_shape.clear_vertex_select()
@@ -478,6 +493,7 @@ class Canvas(QWidget):
             self.update()
 
     def delete_selected(self):
+        """删除当前选中的标注，返回被删除的 Shape 对象。"""
         if self.selected_shape:
             shape = self.selected_shape
             self.un_highlight(shape)
@@ -489,6 +505,7 @@ class Canvas(QWidget):
             return shape
 
     def copy_selected_shape(self):
+        """复制当前选中的标注并偏移放置。"""
         if self.selected_shape:
             shape = self.selected_shape.copy()
             self.de_select_shape()
@@ -499,8 +516,7 @@ class Canvas(QWidget):
             return shape
 
     def bounded_shift_shape(self, shape):
-        # Try to move in one direction, and if it fails in another.
-        # Give up if both fail.
+        """尝试将标注偏移 (2,2)，失败则向反方向偏移。"""
         point = shape[0]
         offset = QPointF(2.0, 2.0)
         self.calculate_offsets(shape, point)
@@ -509,6 +525,7 @@ class Canvas(QWidget):
             self.bounded_move_shape(shape, point + offset)
 
     def paintEvent(self, event):
+        """绘制画布：渲染图片、标注、辅助线。"""
         if not self.pixmap:
             return super(Canvas, self).paintEvent(event)
 
@@ -521,6 +538,7 @@ class Canvas(QWidget):
         p.scale(self.scale, self.scale)
         p.translate(self.offset_to_center())
 
+        # 绘制图片（如有 overlay 颜色则先叠加）
         temp = self.pixmap
         if self.overlay_color:
             temp = QPixmap(self.pixmap)
@@ -534,10 +552,8 @@ class Canvas(QWidget):
         Shape.label_font_size = self.label_font_size
         for shape in self.shapes:
             if (shape.selected or not self._hide_background) and self.isVisible(shape):
-                # fill 只留给选中的 shape
                 shape.fill = shape.selected
-                # save/restore 隔离每个 shape 的 painter state
-                # 防止上一个 shape 的 blue-dot setBrush 泄漏到下一个 shape
+                # save/restore 隔离 painter state，防止 setBrush 泄漏
                 p.save()
                 shape.paint(p)
                 p.restore()
@@ -547,7 +563,7 @@ class Canvas(QWidget):
         if self.selected_shape_copy:
             self.selected_shape_copy.paint(p)
 
-        # Paint rect
+        # 绘制矩形辅助框（对角虚线填充）
         if self.current is not None and len(self.line) == 2:
             left_top = self.line[0]
             right_bottom = self.line[1]
@@ -558,12 +574,13 @@ class Canvas(QWidget):
             p.setBrush(brush)
             p.drawRect(int(left_top.x()), int(left_top.y()), int(rect_width), int(rect_height))
 
+        # 绘制十字参考线（绘制模式下，上一个点的位置）
         if self.drawing() and not self.prev_point.isNull() and not self.out_of_pixmap(self.prev_point):
             p.setPen(QColor(0, 0, 0))
             p.drawLine(int(self.prev_point.x()), 0, int(self.prev_point.x()), int(self.pixmap.height()))
             p.drawLine(0, int(self.prev_point.y()), int(self.pixmap.width()), int(self.prev_point.y()))
 
-        self.setAutoFillBackground(True)
+        # 设置画布背景色（表示验证状态）
         if self.verified:
             pal = self.palette()
             pal.setColor(self.backgroundRole(), QColor(184, 239, 38, 128))
@@ -576,10 +593,11 @@ class Canvas(QWidget):
         p.end()
 
     def transform_pos(self, point):
-        """Convert from widget-logical coordinates to painter-logical coordinates."""
+        """将控件坐标系转换为画布坐标系。"""
         return point / self.scale - self.offset_to_center()
 
     def offset_to_center(self):
+        """计算图片居中显示所需的偏移量。"""
         s = self.scale
         area = super(Canvas, self).size()
         w, h = self.pixmap.width() * s, self.pixmap.height() * s
@@ -589,10 +607,12 @@ class Canvas(QWidget):
         return QPointF(x, y)
 
     def out_of_pixmap(self, p):
+        """判断坐标是否超出图片边界。"""
         w, h = self.pixmap.width(), self.pixmap.height()
         return not (0 <= p.x() <= w and 0 <= p.y() <= h)
 
     def finalise(self):
+        """完成当前标注的绘制：闭合、加入列表、清空当前。"""
         assert self.current
         if self.current.points[0] == self.current.points[-1]:
             self.current = None
@@ -608,13 +628,10 @@ class Canvas(QWidget):
         self.update()
 
     def close_enough(self, p1, p2):
-        # d = distance(p1 - p2)
-        # m = (p1-p2).manhattanLength()
-        # print "d %.2f, m %d, %.2f" % (d, m, d - m)
+        """判断两点是否足够接近（用于闭合吸附）。"""
         return distance(p1 - p2) < self.epsilon
 
-    # These two, along with a call to adjustSize are required for the
-    # scroll area.
+    # sizeHint / minimumSizeHint 是 QScrollArea 所需
     def sizeHint(self):
         return self.minimumSizeHint()
 
@@ -624,6 +641,7 @@ class Canvas(QWidget):
         return super(Canvas, self).minimumSizeHint()
 
     def wheelEvent(self, ev):
+        """滚轮事件：Ctrl+滚轮缩放，Ctrl+Shift+滚轮调亮度，无修饰键滚动。"""
         qt_version = 4 if hasattr(ev, "delta") else 5
         if qt_version == 4:
             if ev.orientation() == Qt.Vertical:
@@ -648,11 +666,8 @@ class Canvas(QWidget):
         ev.accept()
 
     def execute_action(self, action, event=None):
-        """Dispatch a named action.
-        
-        Separates 'what to do' from 'which key triggers it'.
-        Used by both Canvas.keyPressEvent and MainWindow.eventFilter.
-        Future: load action-to-behavior mapping from user config.
+        """分发命名操作：将 '做什么' 与 '按哪个键' 解耦。
+        被 Canvas.keyPressEvent 和 MainWindow.eventFilter 调用。
         """
         if action == 'corner_cw':
             if self.selected_shape:
@@ -666,10 +681,10 @@ class Canvas(QWidget):
             self._select_next_shape(-1)
 
     def _select_next_shape(self, direction):
-        """Select next (direction=1) or previous (direction=-1) shape."""
+        """切换选中标注：direction=1 下一个，-1 上一个。"""
         if not self.shapes:
             return
-        # Clear stale mouse-hover state — keyboard selection shouldn't inherit it
+        # 清除鼠标悬浮高亮——键盘切换不应继承悬浮状态
         self.un_highlight()
         if not self.selected_shape:
             self.select_shape(self.shapes[0 if direction == 1 else -1])
@@ -681,11 +696,12 @@ class Canvas(QWidget):
         self.select_shape(self.shapes[next_idx])
 
     def _lookup_action(self, ev):
-        """Map a key event to an action name via KEY_BINDINGS."""
+        """将按键事件映射为操作名称（查 KEY_BINDINGS）。"""
         shift = ev.modifiers() & Qt.ShiftModifier
         return KEY_BINDINGS.get((ev.key(), shift))
 
     def keyPressEvent(self, ev):
+        """键盘按键处理：方向键移动标注/顶点，Enter 闭合，Escape 取消。"""
         key = ev.key()
         if key == Qt.Key_Escape and self.current:
             print('ESC press')
@@ -706,12 +722,13 @@ class Canvas(QWidget):
         elif key == Qt.Key_Escape:
             self._reset_corner_mode()
         else:
-            # Binding table dispatch — decouples keys from logic
+            # 按键绑定表分发——将物理键与逻辑解耦
             action = self._lookup_action(ev)
             if action:
                 self.execute_action(action)
 
     def keyReleaseEvent(self, ev):
+        """方向键释放：停止加速并清除按键记录。"""
         key = ev.key()
         if key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down):
             if not ev.isAutoRepeat():
@@ -721,26 +738,27 @@ class Canvas(QWidget):
                     self._key_accel.stop()
 
     def _cycle_corner(self, direction):
-        """Cycle selection among corners using data-driven transitions.
-        direction=1:  Clockwise   -1→0→1→2→3→-1→0…
-        direction=-1: Counter-CW  -1→0→3→2→1→-1→0…
-        Both share the same logic — only the transition table differs."""
+        """通过数据驱动的转换表轮换角点选择。
+        direction=1:  顺时针  -1→0→1→2→3→-1→0…
+        direction=-1: 逆时针  -1→0→3→2→1→-1→0…
+        两者共享同一逻辑——只有转换表不同。
+        """
         shape = self.selected_shape
         if shape is None:
             return
         if self.corner_idx == -1:
-            self.corner_idx = 0  # First press always enters at TL(0)
+            self.corner_idx = 0  # 首次按下始终进入左上角(0)
         else:
             transitions = {
-                1: {0: 1, 1: 2, 2: 3, 3: -1},    # clockwise
-                -1: {0: 3, 3: 2, 2: 1, 1: -1},   # counter-clockwise
+                1: {0: 1, 1: 2, 2: 3, 3: -1},    # 顺时针
+                -1: {0: 3, 3: 2, 2: 1, 1: -1},   # 逆时针
             }
             self.corner_idx = transitions[direction].get(self.corner_idx, -1)
         self._apply_corner_visual()
         self.repaint()
 
     def _apply_corner_visual(self):
-        """Update selected shape's visual indicator based on current corner_idx."""
+        """根据当前 corner_idx 更新标注的视觉指示。"""
         shape = self.selected_shape
         if shape is None:
             return
@@ -750,7 +768,7 @@ class Canvas(QWidget):
             shape.clear_vertex_select()
 
     def _reset_corner_mode(self):
-        """Reset to translate mode for all shapes."""
+        """重置为整体平移模式。"""
         if self.corner_idx != -1:
             self.corner_idx = -1
             if self.selected_shape:
@@ -758,7 +776,7 @@ class Canvas(QWidget):
             self.repaint()
 
     def move_one_pixel(self, direction):
-        """Single-step move (kept for API compatibility)."""
+        """单步移动 1 像素（保留以兼容外部 API）。"""
         step = QPointF(0, 0)
         if direction == 'Left':
             step = QPointF(-1.0, 0)
@@ -771,7 +789,7 @@ class Canvas(QWidget):
         self._apply_move_step(step)
 
     def _apply_move_step(self, step):
-        """Apply a (dx, dy) step, either to a corner vertex or to the whole shape."""
+        """应用 (dx, dy) 步长：如果是角点模式则移动单个顶点，否则移动整个标注。"""
         if self.corner_idx >= 0:
             if self._is_valid_vertex_move(self.corner_idx, step):
                 self._move_vertex(self.corner_idx, step)
@@ -809,10 +827,9 @@ class Canvas(QWidget):
         self._apply_move_step(QPointF(dx, dy))
 
     def _move_vertex(self, index, step):
-        """Move a single vertex and its two adjacent edges to maintain rectangle.
-        Mirrors the logic in bounded_move_vertex()."""
+        """移动单个角点，同时调整相邻两点以保持矩形。
+        逻辑与 bounded_move_vertex() 一致。"""
         shape = self.selected_shape
-        # Calculate shift for adjacent vertices
         left_idx = (index + 1) % 4
         right_idx = (index + 3) % 4
         if index % 2 == 0:
@@ -821,18 +838,15 @@ class Canvas(QWidget):
         else:
             left_shift = QPointF(step.x(), 0)
             right_shift = QPointF(0, step.y())
-        # Apply moves
         shape.move_vertex_by(index, step)
         shape.move_vertex_by(right_idx, right_shift)
         shape.move_vertex_by(left_idx, left_shift)
 
     def _is_valid_vertex_move(self, index, step):
-        """Check that moving vertex[index] by step keeps rectangle valid (≥2px, within pixmap)."""
+        """判断移动顶点是否合法（不小于 2px、不超出图片边界）。"""
         shape = self.selected_shape
-        # Compute proposed new positions for all 4 corners
         new_points = [QPointF(p) for p in shape.points]
 
-        # Apply same logic as _move_vertex
         left_idx = (index + 1) % 4
         right_idx = (index + 3) % 4
         if index % 2 == 0:
@@ -846,12 +860,10 @@ class Canvas(QWidget):
         new_points[right_idx] += right_shift
         new_points[left_idx] += left_shift
 
-        # Check all points within pixmap
         for p in new_points:
             if self.out_of_pixmap(p):
                 return False
 
-        # Check minimum size (2px width and height)
         xs = [p.x() for p in new_points]
         ys = [p.y() for p in new_points]
         width = max(xs) - min(xs)
@@ -862,21 +874,22 @@ class Canvas(QWidget):
         return True
 
     def move_out_of_bound(self, step):
+        """判断按 step 移动后是否超出图片边界。"""
         points = [p1 + p2 for p1, p2 in zip(self.selected_shape.points, [step] * 4)]
         return True in map(self.out_of_pixmap, points)
 
     def set_last_label(self, text, line_color=None, fill_color=None):
+        """设置最后一个标注的标签文本和颜色。"""
         assert text
         self.shapes[-1].label = text
         if line_color:
             self.shapes[-1].line_color = line_color
-
         if fill_color:
             self.shapes[-1].fill_color = fill_color
-
         return self.shapes[-1]
 
     def undo_last_line(self):
+        """撤销上一个标注：把它从已完成的列表中移回正在绘制状态。"""
         assert self.shapes
         self.current = self.shapes.pop()
         self.current.set_open()
@@ -884,6 +897,7 @@ class Canvas(QWidget):
         self.drawingPolygon.emit(True)
 
     def reset_all_lines(self):
+        """重置所有标注（撤销所有并清除当前）。"""
         assert self.shapes
         self.current = self.shapes.pop()
         self.current.set_open()
@@ -894,26 +908,31 @@ class Canvas(QWidget):
         self.update()
 
     def load_pixmap(self, pixmap):
+        """加载新图片并清空标注。"""
         self.pixmap = pixmap
         self.shapes = []
         self.repaint()
 
     def load_shapes(self, shapes):
+        """加载已有标注列表。"""
         self.shapes = list(shapes)
         self.current = None
         self.repaint()
 
     def set_shape_visible(self, shape, value):
+        """设置某个标注的可见性。"""
         self.visible[shape] = value
         self.repaint()
 
     def current_cursor(self):
+        """获取当前光标形状。"""
         cursor = QApplication.overrideCursor()
         if cursor is not None:
             cursor = cursor.shape()
         return cursor
 
     def override_cursor(self, cursor):
+        """覆盖光标样式（如果未被覆盖则新建，否则变更）。"""
         self._cursor = cursor
         if self.current_cursor() is None:
             QApplication.setOverrideCursor(cursor)
@@ -921,16 +940,18 @@ class Canvas(QWidget):
             QApplication.changeOverrideCursor(cursor)
 
     def restore_cursor(self):
+        """恢复系统光标。"""
         QApplication.restoreOverrideCursor()
 
     def reset_state(self):
+        """重置画布状态（取消选中、清除高亮、卸载图片）。"""
         self.de_select_shape()
         self.un_highlight()
         self.selected_shape_copy = None
-
         self.restore_cursor()
         self.pixmap = None
         self.update()
 
     def set_drawing_shape_to_square(self, status):
+        """设置绘制模式是否为正方形。"""
         self.draw_square = status

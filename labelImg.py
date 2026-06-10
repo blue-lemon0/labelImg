@@ -36,6 +36,7 @@ from libs.create_ml_io import CreateMLReader
 from libs.create_ml_io import JSON_EXT
 from libs.ustr import ustr
 from libs.hashableQListWidgetItem import HashableQListWidgetItem
+from libs.labelStats import LabelStatsDialog, scan_label_statistics
 
 __appname__ = 'labelImg'
 
@@ -595,11 +596,16 @@ class MainWindow(QMainWindow, WindowMixin):
         add_actions(self.menus.file,
                     (open, open_dir, change_save_dir, open_annotation, copy_prev_bounding, self.menus.recentFiles, save, save_format, save_as, close, reset_all, delete_image, quit))
         add_actions(self.menus.help, (help_default, show_info, show_shortcut))
+
+        # 标签统计
+        label_stats_action = action('标签统计', self.show_label_stats,
+                                    'Ctrl+T', 'labels', '统计当前数据集中的标签分布')
         add_actions(self.menus.view, (
             self.auto_saving,
             self.single_class_mode,
             self.display_label_option,
             labels, advanced_mode, None,
+            label_stats_action, None,
             hide_all, show_all, None,
             zoom_in, zoom_out, zoom_org, None,
             fit_window, fit_width, None,
@@ -1891,6 +1897,24 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def toggle_draw_square(self):
         self.canvas.set_drawing_shape_to_square(self.draw_squares_option.isChecked())
+
+    # ---------------------------------------------------------------------------
+    # 标签统计面板
+    # ---------------------------------------------------------------------------
+
+    def show_label_stats(self):
+        """打开标签统计对话框，全量扫描数据集并展示。"""
+        if not self.m_img_list:
+            QMessageBox.information(self, '提示', '请先打开一个图片目录。')
+            return
+
+        stats = scan_label_statistics(self.m_img_list, self.default_save_dir)
+        if not stats:
+            QMessageBox.information(self, '提示', '数据集中未找到标注文件。')
+            return
+
+        dialog = LabelStatsDialog(stats, self)
+        dialog.exec_()
 
 def inverted(color):
     return QColor(*[255 - v for v in color.getRgb()])

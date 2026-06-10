@@ -1417,6 +1417,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if dir_path is not None and len(dir_path) > 1:
             self.default_save_dir = dir_path
             self.update_path_info()
+            self._refresh_all_file_colors()
 
         if self.file_path is not None:
             self.show_bounding_box_from_annotation_file(self.file_path)
@@ -1658,17 +1659,17 @@ class MainWindow(QMainWindow, WindowMixin):
     def _save_file(self, annotation_file_path):
         if annotation_file_path and self.save_labels(annotation_file_path):
             self.set_clean()
-            self._refresh_file_item_color()
+            self._apply_file_color(self.file_path)
         self.status('Saved to  %s' % annotation_file_path)
 
-    def _refresh_file_item_color(self):
-        """Update the current image's file list item color after saving."""
-        if not self.file_path:
+    def _apply_file_color(self, img_path):
+        """Set file list foreground color for a single image by its full path."""
+        if not img_path:
             return
         for i in range(self.file_list_widget.count()):
             item = self.file_list_widget.item(i)
-            if item.data(Qt.UserRole) == self.file_path:
-                status = self._get_annotation_status(self.file_path)
+            if item.data(Qt.UserRole) == img_path:
+                status = self._get_annotation_status(img_path)
                 if status == 0:
                     item.setForeground(QColor('#888888'))
                 elif status == 1:
@@ -1677,6 +1678,20 @@ class MainWindow(QMainWindow, WindowMixin):
                     # 有标注 → 重置为系统默认色
                     item.setForeground(QBrush())
                 break
+
+    def _refresh_all_file_colors(self):
+        """Re-evaluate and refresh colors for every item in the file list."""
+        for i in range(self.file_list_widget.count()):
+            item = self.file_list_widget.item(i)
+            img_path = item.data(Qt.UserRole)
+            if img_path:
+                status = self._get_annotation_status(img_path)
+                if status == 0:
+                    item.setForeground(QColor('#888888'))
+                elif status == 1:
+                    item.setForeground(QColor('#E57373'))
+                else:
+                    item.setForeground(QBrush())
 
     def close_file(self, _value=False):
         if not self.may_continue():

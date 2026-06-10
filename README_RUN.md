@@ -44,3 +44,9 @@ git add libs/resources.py
 ```
 
 > `libs/resources.py` 已纳入版本管理，不编译直接改 `.properties` 不会生效。
+
+---
+
+## 待办
+
+- [ ] **标签统计面板**：全量扫描数据集，展示标签名 + 出现次数 + 涉及图片数 + 疑似拼写错误告警

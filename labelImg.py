@@ -61,11 +61,11 @@ class WindowMixin(object):
 
 
 class StatusManager:
-    """Manages status bar messages with auto-restore of default message.
+    """管理状态栏消息，支持自动恢复默认提示。
     
-    - set_default() stores the default message (e.g. save dir path)
-    - show() shows a message, optionally auto-restoring default after a delay
-    - No blank gaps: restoration is timer-driven, not dependent on showMessage timeout
+    - set_default() 保存默认消息（如保存目录路径）
+    - show() 显示消息，可设置延时后自动恢复默认
+    - 无空白间隙：通过定时器恢复，不依赖 showMessage 超时
     """
 
     def __init__(self, status_bar):
@@ -75,28 +75,28 @@ class StatusManager:
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._restore_default)
 
-        # Intercept ALL message changes: if anything clears the bar, restore default
+        # 拦截所有消息变化：如果状态栏被清空，恢复默认
         self._bar.messageChanged.connect(self._on_message_changed)
 
     def set_default(self, text):
-        """Set the default message. Shows immediately if no active temp message."""
+        """设置默认消息。如果当前无临时消息，立即显示。"""
         self._default = text
         if not self._timer.isActive():
             self._restore_default()
 
     def clear_default(self):
-        """Clear the default message."""
+        """清除默认消息。"""
         self._default = ''
         if not self._timer.isActive():
             self._bar.clearMessage()
 
     def show(self, text, delay=0):
-        """Show a message. If delay > 0, restore default after delay ms.
+        """显示消息。如果 delay > 0，超时后自动恢复默认。
         
         Args:
-            text: Message to display
-            delay: If > 0, auto-restore default after this many ms.
-                   If 0, message stays until next show() or set_default() call.
+            text: 要显示的消息
+            delay: 若 > 0，则在此毫秒后自动恢复默认
+                   若为 0，消息一直保持到下次 show() 或 set_default() 调用
         """
         self._timer.stop()
         self._bar.showMessage(text)
@@ -110,10 +110,10 @@ class StatusManager:
             self._bar.clearMessage()
 
     def _on_message_changed(self, text):
-        """Called whenever the status bar message changes.
+        """状态栏消息变化时的回调。
         
-        If the bar goes blank and we have a default, restore it.
-        This catches ALL clearMessage/showMessage('') calls from any source.
+        如果状态栏变空白且有默认消息，则恢复默认。
+        覆盖所有来自任何源的 clearMessage/showMessage('') 调用。
         """
         if not text and self._default:
             self._bar.showMessage(self._default)
@@ -126,22 +126,22 @@ class MainWindow(QMainWindow, WindowMixin):
         super(MainWindow, self).__init__()
         self.setWindowTitle(__appname__)
 
-        # Load setting in the main thread
+        # 在主线程加载设置
         self.settings = Settings()
         self.settings.load()
         settings = self.settings
 
         self.os_name = platform.system()
 
-        # Load string bundle for i18n
+        # 加载国际化字符串
         self.string_bundle = StringBundle.get_bundle()
         get_str = lambda str_id: self.string_bundle.get_string(str_id)
 
-        # Save as Pascal voc xml
+        # 默认保存为 Pascal VOC XML 格式
         self.default_save_dir = default_save_dir
         self.label_file_format = settings.get(SETTING_LABEL_FILE_FORMAT, LabelFileFormat.PASCAL_VOC)
 
-        # For loading all image under a directory
+        # 存放目录下所有图片路径
         self.m_img_list = []
         self.dir_name = None
         self.label_hist = []
@@ -149,7 +149,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.cur_img_idx = 0
         self.img_count = len(self.m_img_list)
 
-        # Whether we need to save or not.
+        # 是否需要保存
         self.dirty = False
         self._paste_undo_stack = []
 
@@ -157,7 +157,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._beginner = True
         self.screencast = "https://youtu.be/p0nR2YsCY_U"
 
-        # Load predefined classes to the list
+        # 加载预设类别到列表
         self.load_predefined_classes(default_prefdef_class_file)
 
         if self.label_hist:
@@ -165,7 +165,7 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             print("Not find:/data/predefined_classes.txt (optional)")
 
-        # Main widgets and related state.
+        # 主控件及相关状态
         self.label_dialog = LabelDialog(parent=self, list_item=self.label_hist)
 
         self.items_to_shapes = {}
@@ -175,7 +175,7 @@ class MainWindow(QMainWindow, WindowMixin):
         list_layout = QVBoxLayout()
         list_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create a widget for using default label
+        # 默认标签控件：复选框 + 输入框
         self.use_default_label_checkbox = QCheckBox(get_str('useDefaultLabel'))
         self.use_default_label_checkbox.setChecked(False)
         self.default_label_text_line = QLineEdit()
@@ -189,7 +189,7 @@ class MainWindow(QMainWindow, WindowMixin):
         use_default_label_container = QWidget()
         use_default_label_container.setLayout(use_default_label_qhbox_layout)
 
-        # Create a widget for edit and diffc button
+        # 编辑与「难以辨认」按钮控件
         self.diffc_button = QCheckBox(get_str('useDifficult'))
         self.diffc_button.setChecked(False)
         self.diffc_button.setToolTip("勾选后，当前选中的框标记为「难以辨认」\n评估模型时可选择排除此类样本（Pascal VOC difficult 标准）")
@@ -197,12 +197,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.edit_button = QToolButton()
         self.edit_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
 
-        # Add some of widgets to list_layout
+        # 将控件添加到标签列表布局
         list_layout.addWidget(self.edit_button)
         list_layout.addWidget(self.diffc_button)
         list_layout.addWidget(use_default_label_container)
 
-        # Create and add combobox for showing unique labels in group
+        # 创建下拉框，用于筛选标签
         self.combo_box = ComboBox(self)
         combo_layout = QHBoxLayout()
         combo_layout.setContentsMargins(0, 0, 0, 0)
@@ -215,14 +215,14 @@ class MainWindow(QMainWindow, WindowMixin):
         combo_container.setLayout(combo_layout)
         list_layout.addWidget(combo_container)
 
-        # Create and add a widget for showing current label items
+        # 创建当前标注列表
         self.label_list = QListWidget()
         label_list_container = QWidget()
         label_list_container.setLayout(list_layout)
         self.label_list.itemActivated.connect(self.label_selection_changed)
         self.label_list.itemSelectionChanged.connect(self.label_selection_changed)
         self.label_list.itemDoubleClicked.connect(self.edit_label)
-        # Connect to itemChanged to detect checkbox changes.
+        # 监听 itemChanged 以检测复选框状态变化
         self.label_list.itemChanged.connect(self.label_item_changed)
         list_layout.addWidget(self.label_list)
 
@@ -276,7 +276,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.dock_features = QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
         self.dock.setFeatures(self.dock.features() ^ self.dock_features)
 
-        # Actions
+        # 创建所有 Action
         action = partial(new_action, self)
         quit = action(get_str('quit'), self.close,
                       'Ctrl+Q', 'quit', get_str('quitApp'))
@@ -309,7 +309,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         def get_format_meta(format):
             """
-            returns a tuple containing (title, icon_name) of the selected format
+            返回 (标题, 图标名) 元组
             """
             if format == LabelFileFormat.PASCAL_VOC:
                 return '&PascalVOC', 'format_voc'
@@ -382,14 +382,14 @@ class MainWindow(QMainWindow, WindowMixin):
         fit_width = action(get_str('fitWidth'), self.set_fit_width,
                            'Ctrl+Shift+F', 'fit-width', get_str('fitWidthDetail'),
                            checkable=True, enabled=False)
-        # Group zoom controls into a list for easier toggling.
+        # 将缩放控件分组，方便统一启用/禁用
         zoom_actions = (self.zoom_widget, zoom_in, zoom_out,
                         zoom_org, fit_window, fit_width)
         self.zoom_mode = self.MANUAL_ZOOM
         self.scalers = {
             self.FIT_WINDOW: self.scale_fit_window,
             self.FIT_WIDTH: self.scale_fit_width,
-            # Set to one to scale to 100% when loading files.
+            # 加载文件时缩放到 100%
             self.MANUAL_ZOOM: lambda: 1,
         }
 
@@ -408,11 +408,11 @@ class MainWindow(QMainWindow, WindowMixin):
                            'Ctrl+Shift+=', 'light_reset', get_str('lightresetDetail'), checkable=True, enabled=False)
         light_org.setChecked(True)
 
-        # Group light controls into a list for easier toggling.
+        # 将亮度控件分组，方便统一启用/禁用
         light_actions = (self.light_widget, light_brighten,
                          light_darken, light_org)
 
-        # Compound: [-] [65] [+] in one toolbar row.
+        # 复合控件：[-] [65] [+] 在同一行
         self.zoom_panel = ZoomWidgetPanel(self.zoom_widget, zoom_in, zoom_out)
         zoom_compound = QWidgetAction(self)
         zoom_compound.setDefaultWidget(self.zoom_panel)
@@ -436,21 +436,21 @@ class MainWindow(QMainWindow, WindowMixin):
         labels.setText(get_str('showHide'))
         labels.setShortcut('Ctrl+Shift+L')
 
-        # Label list context menu.
+        # 标签列表右键菜单
         label_menu = QMenu()
         add_actions(label_menu, (edit, delete))
         self.label_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.label_list.customContextMenuRequested.connect(
             self.pop_label_list_menu)
 
-        # Draw squares/rectangles
+        # 绘制正方形/矩形切换
         self.draw_squares_option = QAction(get_str('drawSquares'), self)
         self.draw_squares_option.setShortcut('Ctrl+Shift+R')
         self.draw_squares_option.setCheckable(True)
         self.draw_squares_option.setChecked(settings.get(SETTING_DRAW_SQUARE, False))
         self.draw_squares_option.triggered.connect(self.toggle_draw_square)
 
-        # Store actions for further handling.
+        # 存储所有 Action 便于后续统一管理
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, delete=delete, edit=edit, copy=copy, undoPaste=undo_paste,
                               createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode,
@@ -480,17 +480,17 @@ class MainWindow(QMainWindow, WindowMixin):
             recentFiles=QMenu(get_str('menu_openRecent')),
             labelList=label_menu)
 
-        # Auto saving : Enable auto saving if pressing next
+        # 自动保存：翻页时自动保存标注
         self.auto_saving = QAction(get_str('autoSaveMode'), self)
         self.auto_saving.setCheckable(True)
         self.auto_saving.setChecked(settings.get(SETTING_AUTO_SAVE, False))
-        # Sync single class mode from PR#106
+        # 单类别模式（PR#106）
         self.single_class_mode = QAction(get_str('singleClsMode'), self)
         self.single_class_mode.setShortcut("Ctrl+Shift+S")
         self.single_class_mode.setCheckable(True)
         self.single_class_mode.setChecked(settings.get(SETTING_SINGLE_CLASS, False))
         self.lastLabel = None
-        # Add option to enable/disable labels being displayed at the top of bounding boxes
+        # 标签显示在框上方的开关
         self.display_label_option = QAction(get_str('displayLabel'), self)
         self.display_label_option.setShortcut("Ctrl+Shift+P")
         self.display_label_option.setCheckable(True)
@@ -512,7 +512,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.menus.file.aboutToShow.connect(self.update_file_menu)
 
-        # Custom context menu for the canvas widget:
+        # 画布自定义右键菜单
         add_actions(self.canvas.menus[0], self.actions.beginnerContext)
         add_actions(self.canvas.menus[1], (
             action('&Copy here', self.copy_shape),
@@ -532,7 +532,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.status_manager = StatusManager(self.statusBar())
         self.status_manager.show('%s started.' % __appname__)
 
-        # Application state.
+        # 应用程序状态
         self.image = QImage()
         self.file_path = ustr(default_filename)
         self.last_open_dir = None
@@ -542,7 +542,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.fill_color = None
         self.zoom_level = 100
         self.fit_window = False
-        # Add Chris
+        # Chris 添加：difficult 标记
         self.difficult = False
 
         if settings.get(SETTING_RECENT_FILES):
@@ -551,7 +551,7 @@ class MainWindow(QMainWindow, WindowMixin):
         size = settings.get(SETTING_WIN_SIZE, QSize(600, 500))
         position = QPoint(0, 0)
         saved_position = settings.get(SETTING_WIN_POSE, position)
-        # Fix the multiple monitors issue
+        # 修复多显示器问题
         for i in range(QApplication.desktop().screenCount()):
             if QApplication.desktop().availableGeometry(i).contains(saved_position):
                 position = saved_position
@@ -570,7 +570,7 @@ class MainWindow(QMainWindow, WindowMixin):
         Shape.line_color = self.line_color = QColor(settings.get(SETTING_LINE_COLOR, DEFAULT_LINE_COLOR))
         Shape.fill_color = self.fill_color = QColor(settings.get(SETTING_FILL_COLOR, DEFAULT_FILL_COLOR))
         self.canvas.set_drawing_color(self.line_color)
-        # Add chris
+        # Chris 添加：difficult 标记
         Shape.difficult = self.difficult
 
         def xbool(x):
@@ -582,10 +582,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.advancedMode.setChecked(True)
             self.toggle_advanced_mode()
 
-        # Populate the File menu dynamically.
+        # 动态填充最近文件菜单
         self.update_file_menu()
 
-        # Since loading the file may take some time, make sure it runs in the background.
+        # 加载文件可能耗时，放入队列异步执行
         if self.file_path and os.path.isdir(self.file_path):
             self.queue_event(partial(self.import_dir_images, self.file_path or ""))
         elif self.file_path:
@@ -593,21 +593,21 @@ class MainWindow(QMainWindow, WindowMixin):
         elif self.last_open_dir and os.path.isdir(self.last_open_dir):
             self.queue_event(partial(self.import_dir_images, self.last_open_dir))
 
-        # Callbacks:
+        # 回调绑定
         self.zoom_widget.valueChanged.connect(self.paint_canvas)
         self.light_widget.valueChanged.connect(self.paint_canvas)
 
         self.populate_mode_actions()
 
-        # Display cursor coordinates at the right of status bar
+        # 在状态栏右侧显示鼠标坐标
         self.label_coordinates = QLabel('')
         self.statusBar().addPermanentWidget(self.label_coordinates)
 
-        # Open Dir if default file
+        # 如果启动时传入的是目录，直接打开
         if self.file_path and os.path.isdir(self.file_path):
             self.open_dir_dialog(dir_path=self.file_path, silent=True)
 
-        # Global event filter: intercept custom keybindings before child widgets consume them
+        # 全局事件过滤器：在子控件之前拦截自定义快捷键
         self.installEventFilter(self)
 
     def keyReleaseEvent(self, event):
@@ -616,24 +616,24 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Control:
-            # Draw rectangle if Ctrl is pressed
+            # 按住 Ctrl 时绘制正方形
             self.canvas.set_drawing_shape_to_square(True)
 
     def eventFilter(self, obj, event):
-        """Intercept keybindings before child widgets (e.g. QListWidget) consume them.
-        
-        Uses the same KEY_BINDINGS table as Canvas.keyPressEvent,
-        so keys stay decoupled from logic.
+        """在子控件（如 QListWidget）消费前拦截快捷键。
+
+        复用与 Canvas.keyPressEvent 相同的 KEY_BINDINGS 表，
+        按键与逻辑保持解耦。
         """
         if event.type() == QEvent.KeyPress:
             shift = event.modifiers() & Qt.ShiftModifier
             action = KEY_BINDINGS.get((event.key(), shift))
             if action is not None:
                 self.canvas.execute_action(action, event)
-                return True  # Eat the event — prevent child widget from getting it
+                return True  # 吃掉事件，防止子控件继续处理
         return super().eventFilter(obj, event)
 
-    # Support Functions #
+    # 辅助功能 #
     def set_format(self, save_format):
         if save_format == FORMAT_PASCALVOC:
             self.actions.save_format.setText(FORMAT_PASCALVOC)
@@ -711,7 +711,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.create.setEnabled(True)
 
     def toggle_actions(self, value=True):
-        """Enable/Disable widgets which depend on an opened image."""
+        """启用/禁用依赖已打开图片的控件。"""
         for z in self.actions.zoomActions:
             z.setEnabled(value)
         for z in self.actions.lightActions:
@@ -792,10 +792,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.create.setEnabled(False)
 
     def toggle_drawing_sensitive(self, drawing=True):
-        """In the middle of drawing, toggling between modes should be disabled."""
+        """绘制过程中，禁止切换模式。"""
         self.actions.editMode.setEnabled(not drawing)
         if not drawing and self.beginner():
-            # Cancel creation.
+            # 取消绘制
             print('Cancel creation.')
             self.canvas.set_editing(True)
             self.canvas.restore_cursor()
@@ -847,7 +847,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.set_dirty()
             self.update_combo_box()
 
-    # Tzutalin 20160906 : Add file list and dock to move faster
+    # Tzutalin 20160906：文件列表，双击切换图片
     def file_item_double_clicked(self, item=None):
         abs_path = ustr(item.data(Qt.UserRole))
         self.cur_img_idx = self.m_img_list.index(abs_path)
@@ -855,10 +855,9 @@ class MainWindow(QMainWindow, WindowMixin):
         if filename:
             self.load_file(filename)
 
-    # Add chris
+    # Chris 添加：difficult 标记
     def button_state(self, item=None):
-        """ Function to handle difficult examples
-        Update on each object """
+        """处理 difficult 复选框，更新到当前 shape"""
         if not self.canvas.editing():
             return
 
@@ -872,7 +871,7 @@ class MainWindow(QMainWindow, WindowMixin):
             shape = self.items_to_shapes[item]
         except:
             pass
-        # Checked and Update
+        # 同步状态
         try:
             if difficult != shape.difficult:
                 shape.difficult = difficult
@@ -882,7 +881,7 @@ class MainWindow(QMainWindow, WindowMixin):
         except:
             pass
 
-    # React to canvas signals.
+    # 响应画布信号
     def shape_selection_changed(self, selected=False):
         if self._no_selection_slot:
             self._no_selection_slot = False
@@ -940,7 +939,7 @@ class MainWindow(QMainWindow, WindowMixin):
             shape = Shape(label=label)
             for x, y in points:
 
-                # Ensure the labels are within the bounds of the image. If not, fix them.
+                # 确保标注点不超出图片边界，超出则吸附
                 x, y, snapped = self.canvas.snap_point_to_canvas(x, y)
                 if snapped:
                     self.set_dirty()
@@ -969,11 +968,11 @@ class MainWindow(QMainWindow, WindowMixin):
         self._validate_label_list()
 
     def update_combo_box(self):
-        # Get the unique labels and add them to the Combobox.
+        # 获取唯一的标签名，填充到下拉框
         items_text_list = [str(self.label_list.item(i).text()) for i in range(self.label_list.count())]
 
         unique_text_list = list(set(items_text_list))
-        # Add a null row for showing all the labels
+        # 添加空行表示显示全部
         unique_text_list.append("")
         unique_text_list.sort()
 
@@ -990,11 +989,11 @@ class MainWindow(QMainWindow, WindowMixin):
                         line_color=s.line_color.getRgb(),
                         fill_color=s.fill_color.getRgb(),
                         points=[(p.x(), p.y()) for p in s.points],
-                        # add chris
+                        # Chris 添加：difficult 标记
                         difficult=s.difficult)
 
         shapes = [format_shape(shape) for shape in self.canvas.shapes]
-        # Can add different annotation formats here
+        # 可在此扩展其他标注格式
         try:
             if self.label_file_format == LabelFileFormat.PASCAL_VOC:
                 if annotation_file_path[-4:].lower() != ".xml":
@@ -1022,7 +1021,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def copy_selected_shape(self):
         self.add_label(self.canvas.copy_selected_shape())
-        # fix copy and delete
+        # 修复复制后删除的问题
         self.shape_selection_changed(True)
 
     def combo_selection_changed(self, index):
@@ -1044,7 +1043,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self._no_selection_slot = True
             self.canvas.select_shape(self.items_to_shapes[item])
             shape = self.items_to_shapes[item]
-            # Add Chris
+            # Chris 添加：difficult 标记
             self.diffc_button.setChecked(shape.difficult)
 
     def label_item_changed(self, item):
@@ -1057,18 +1056,18 @@ class MainWindow(QMainWindow, WindowMixin):
         else:  # User probably changed item visibility
             self.canvas.set_shape_visible(shape, item.checkState() == Qt.Checked)
 
-    # Callback functions:
+    # 回调函数
     def new_shape(self):
-        """Pop-up and give focus to the label editor.
+        """弹出标签编辑器并获取焦点。
 
-        position MUST be in global coordinates.
+        position 必须是全局坐标。
         """
         if not self.use_default_label_checkbox.isChecked() or not self.default_label_text_line.text():
             if len(self.label_hist) > 0:
                 self.label_dialog = LabelDialog(
                     parent=self, list_item=self.label_hist)
 
-            # Sync single class mode from PR#106
+            # 单类别模式（PR#106）
             if self.single_class_mode.isChecked() and self.lastLabel:
                 text = self.lastLabel
             else:
@@ -1077,7 +1076,7 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             text = self.default_label_text_line.text()
 
-        # Add Chris
+        # Chris 添加：difficult 标记
         self.diffc_button.setChecked(False)
         if text is not None:
             self.prev_label_text = text
@@ -1106,28 +1105,28 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.fitWidth.setChecked(False)
         self.actions.fitWindow.setChecked(False)
         self.zoom_mode = self.MANUAL_ZOOM
-        # Arithmetic on scaling factor often results in float
-        # Convert to int to avoid type errors
+        # 缩放系数计算可能产生浮点
+        # 转为 int 避免类型错误
         self.zoom_widget.setValue(int(value))
 
     def add_zoom(self, increment=10):
         self.set_zoom(self.zoom_widget.value() + increment)
 
     def zoom_request(self, delta):
-        # get the current scrollbar positions
-        # calculate the percentages ~ coordinates
+        # 获取当前滚动条位置
+        # 计算百分比坐标
         h_bar = self.scroll_bars[Qt.Horizontal]
         v_bar = self.scroll_bars[Qt.Vertical]
 
-        # get the current maximum, to know the difference after zooming
+        # 获取当前最大值，缩放后计算差值
         h_bar_max = h_bar.maximum()
         v_bar_max = v_bar.maximum()
 
-        # get the cursor position and canvas size
-        # calculate the desired movement from 0 to 1
-        # where 0 = move left
-        #       1 = move right
-        # up and down analogous
+        # 获取光标位置和画布尺寸
+        # 计算目标移动量（0~1）
+        # 0 = 向左移
+        # 1 = 向右移
+        # 上下同理
         cursor = QCursor()
         pos = cursor.pos()
         relative_pos = QWidget.mapFromGlobal(self, pos)
@@ -1138,27 +1137,27 @@ class MainWindow(QMainWindow, WindowMixin):
         w = self.scroll_area.width()
         h = self.scroll_area.height()
 
-        # the scaling from 0 to 1 has some padding
-        # you don't have to hit the very leftmost pixel for a maximum-left movement
+        # 0~1 缩放留了边距
+        # 不必精准点击最边缘即可达到最大移动
         margin = 0.1
         move_x = (cursor_x - margin * w) / (w - 2 * margin * w)
         move_y = (cursor_y - margin * h) / (h - 2 * margin * h)
 
-        # clamp the values from 0 to 1
+        # 限制在 0~1 范围内
         move_x = min(max(move_x, 0), 1)
         move_y = min(max(move_y, 0), 1)
 
-        # zoom in
+        # 放大
         units = delta // (8 * 15)
         scale = 10
         self.add_zoom(scale * units)
 
-        # get the difference in scrollbar values
-        # this is how far we can move
+        # 计算滚动条差值的差值
+        # 即可以移动多远
         d_h_bar_max = h_bar.maximum() - h_bar_max
         d_v_bar_max = v_bar.maximum() - v_bar_max
 
-        # get the new scrollbar values
+        # 计算新的滚动条位置
         new_h_bar_value = int(h_bar.value() + move_x * d_h_bar_max)
         new_v_bar_value = int(v_bar.value() + move_y * d_v_bar_max)
 
@@ -1182,8 +1181,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def set_light(self, value):
         self.actions.lightOrg.setChecked(int(value) == 50)
-        # Arithmetic on scaling factor often results in float
-        # Convert to int to avoid type errors
+        # 缩放系数计算可能产生浮点
+        # 转为 int 避免类型错误
         self.light_widget.setValue(int(value))
 
     def add_light(self, increment=10):
@@ -1194,19 +1193,19 @@ class MainWindow(QMainWindow, WindowMixin):
             item.setCheckState(Qt.Checked if value else Qt.Unchecked)
 
     def load_file(self, file_path=None):
-        """Load the specified file, or the last opened file if None."""
+        """加载指定文件，若为 None 则加载上次打开的文件。"""
         self.reset_state()
         self.canvas.setEnabled(False)
         if file_path is None:
             file_path = self.settings.get(SETTING_FILENAME)
-        # Make sure that filePath is a regular python string, rather than QString
+        # 确保 filePath 是普通 Python 字符串，而非 QString
         file_path = ustr(file_path)
 
-        # Fix bug: An  index error after select a directory when open a new file.
+        # 修复：选择目录后打开新文件时的索引错误
         unicode_file_path = ustr(file_path)
         unicode_file_path = os.path.abspath(unicode_file_path)
-        # Tzutalin 20160906 : Add file list and dock to move faster
-        # Highlight the file item and scroll to it
+        # Tzutalin 20160906：文件列表，双击切换图片
+        # 高亮当前图片并滚动到可见区域
         if unicode_file_path and self.file_list_widget.count() > 0:
             if unicode_file_path in self.m_img_list:
                 index = self.m_img_list.index(unicode_file_path)
@@ -1234,8 +1233,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.fill_color = QColor(*self.label_file.fillColor)
                 self.canvas.verified = self.label_file.verified
             else:
-                # Load image:
-                # read data first and store for saving into label file.
+                # 加载图片：
+                # 先读取数据，保存到标注文件时使用
                 self.image_data = read(unicode_file_path, None)
                 self.label_file = None
                 self.canvas.verified = False
@@ -1268,7 +1267,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.file_dock.setWindowTitle(self._file_dock_base + ' ' + counter)
             self.update_path_info()
 
-            # Default : select last item if there is at least one item
+            # 默认选择标签列表的最后一项
             if self.label_list.count():
                 self.label_list.setCurrentItem(self.label_list.item(self.label_list.count() - 1))
                 self.label_list.item(self.label_list.count() - 1).setSelected(True)
@@ -1290,8 +1289,8 @@ class MainWindow(QMainWindow, WindowMixin):
             txt_path = os.path.join(self.default_save_dir, basename + TXT_EXT)
             json_path = os.path.join(self.default_save_dir, basename + JSON_EXT)
 
-            """Annotation file priority:
-            PascalXML > YOLO
+            """标注文件优先级：
+            PascalXML > YOLO > CreateML
             """
             if os.path.isfile(xml_path):
                 self.load_pascal_xml_by_filename(xml_path, replace=replace)
@@ -1332,24 +1331,24 @@ class MainWindow(QMainWindow, WindowMixin):
         self.zoom_widget.setValue(int(100 * value))
 
     def update_path_info(self):
-        """Set the default status bar message to current save directory."""
+        """将状态栏默认消息设为当前保存目录。"""
         if self.default_save_dir:
             self.status_manager.set_default(u'保存: %s' % self.default_save_dir)
 
     def scale_fit_window(self):
-        """Figure out the size of the pixmap in order to fit the main widget."""
-        e = 2.0  # So that no scrollbars are generated.
+        """计算缩放比例，使图片适应主窗口。"""
+        e = 2.0  # 留 2px 边距，防止产生滚动条
         w1 = self.centralWidget().width() - e
         h1 = self.centralWidget().height() - e
         a1 = w1 / h1
-        # Calculate a new scale value based on the pixmap's aspect ratio.
+        # 根据图片宽高比计算缩放值
         w2 = self.canvas.pixmap.width() - 0.0
         h2 = self.canvas.pixmap.height() - 0.0
         a2 = w2 / h2
         return w1 / w2 if a2 >= a1 else h1 / h2
 
     def scale_fit_width(self):
-        # The epsilon does not seem to work too well here.
+        # 边距在这里效果不太好，不加了
         w = self.centralWidget().width() - 2.0
         return w / self.canvas.pixmap.width()
 
@@ -1357,7 +1356,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.may_continue():
             event.ignore()
         settings = self.settings
-        # If it loads images from dir, don't load it at the beginning
+        # 如果是目录加载模式，启动时不加载特定文件
         if self.dir_name is None:
             settings[SETTING_FILENAME] = self.file_path if self.file_path else ''
         else:
@@ -1476,12 +1475,12 @@ class MainWindow(QMainWindow, WindowMixin):
             self.show_bounding_box_from_annotation_file(file_path=self.file_path)
 
     def _get_annotation_status(self, img_path):
-        """Check annotation status of an image.
+        """检查一张图片的标注状态。
 
         Returns:
-            0 — no annotation file found
-            1 — file exists but empty (no boxes/labels)
-            2 — file exists with actual annotations
+            0 — 无标注文件
+            1 — 标注文件存在但为空（无标签）
+            2 — 标注文件存在且有实际标注
         """
         for ext in (XML_EXT, TXT_EXT, JSON_EXT):
             if self.default_save_dir:
@@ -1532,13 +1531,13 @@ class MainWindow(QMainWindow, WindowMixin):
             self.file_list_widget.addItem(item)
 
     def verify_image(self, _value=False):
-        # Proceeding next image without dialog if having any label
+        # 如果有标注且启用了自动保存，直接保存并继续
         if self.file_path is not None:
             try:
                 self.label_file.toggle_verify()
             except AttributeError:
-                # If the labelling file does not exist yet, create if and
-                # re-save it with the verified attribute.
+                # 如果标注文件还不存在，先保存
+                # 再切换 verified 状态
                 self.save_file()
                 if self.label_file is not None:
                     self.label_file.toggle_verify()
@@ -1550,7 +1549,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.save_file()
 
     def open_prev_image(self, _value=False):
-        # Proceeding prev image without dialog if having any label
+        # 如果有标注且启用了自动保存，直接保存并继续
         if self.auto_saving.isChecked():
             if self.default_save_dir is not None:
                 if self.dirty is True:
@@ -1575,7 +1574,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.load_file(filename)
 
     def open_next_image(self, _value=False):
-        # Proceeding next image without dialog if having any label
+        # 如果有标注且启用了自动保存，直接保存并继续
         if self.auto_saving.isChecked():
             if self.default_save_dir is not None:
                 if self.dirty is True:
@@ -1663,7 +1662,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.status('Saved to  %s' % annotation_file_path)
 
     def _apply_file_color(self, img_path):
-        """Set file list foreground color for a single image by its full path."""
+        """根据标注状态设置文件列表中某一项的文字颜色。"""
         if not img_path:
             return
         for i in range(self.file_list_widget.count()):
@@ -1680,7 +1679,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 break
 
     def _refresh_all_file_colors(self):
-        """Re-evaluate and refresh colors for every item in the file list."""
+        """重新计算并刷新文件列表中所有项的颜色。"""
         for i in range(self.file_list_widget.count()):
             item = self.file_list_widget.item(i)
             img_path = item.data(Qt.UserRole)
@@ -1783,7 +1782,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def copy_shape(self):
         if self.canvas.selected_shape is None:
-            # True if one accidentally touches the left mouse button before releasing
+            # 防止误触：松开前碰到了左键
             return
         self.canvas.end_move(copy=True)
         self.add_label(self.canvas.selected_shape)
@@ -1902,7 +1901,7 @@ def get_main_app(argv=None):
     app = QApplication(argv)
     app.setApplicationName(__appname__)
     app.setWindowIcon(new_icon("app"))
-    # Tzutalin 201705+: Accept extra agruments to change predefined class file
+    # Tzutalin 201705+：接受额外参数指定类别文件
     argparser = argparse.ArgumentParser()
     argparser.add_argument("image_dir", nargs="?")
     argparser.add_argument("class_file",
@@ -1915,7 +1914,7 @@ def get_main_app(argv=None):
     args.class_file = args.class_file and os.path.normpath(args.class_file)
     args.save_dir = args.save_dir and os.path.normpath(args.save_dir)
 
-    # Usage : labelImg.py image classFile saveDir
+    # 用法：labelImg.py 图片路径 类别文件 保存目录
     win = MainWindow(args.image_dir,
                      args.class_file,
                      args.save_dir)
@@ -1924,7 +1923,7 @@ def get_main_app(argv=None):
 
 
 def main():
-    """construct main app and run it"""
+    """构建主应用并运行"""
     app, _win = get_main_app(sys.argv)
     return app.exec_()
 

@@ -14,16 +14,22 @@ from libs.constants import DEFAULT_ENCODING
 
 
 class LabelStatsDialog(QDialog):
-    """标签统计对话框，以表格展示全数据集的标签分布。"""
+    """标签统计对话框，以表格展示全数据集的标签分布。
+
+    双击任意行可跳转到包含该标签的第一张图片。
+    """
 
     TABLE_HEADERS = ['标签名', '标注框数', '涉及图片数', '疑似拼写错误的标签']
 
-    def __init__(self, stats, parent=None):
+    def __init__(self, stats, parent=None, on_jump_to=None):
         """
         Args:
             stats: dict, {label_name: {'box_count': int, 'image_count': int, 'images': set}}
+            on_jump_to: callable(img_path), 双击行时回调，传入图片路径
         """
         super(LabelStatsDialog, self).__init__(parent)
+        self._stats = stats
+        self._on_jump_to = on_jump_to
         self.setWindowTitle('标签统计')
         self.resize(700, 500)
         self._build_ui(stats)
@@ -57,6 +63,9 @@ class LabelStatsDialog(QDialog):
                               key=lambda x: (-x[1]['box_count'], x[0]))
         self.table.setRowCount(len(sorted_items))
 
+        # 存一份 row → label 映射供跳转用
+        self._row_labels = [item[0] for item in sorted_items]
+
         # 拼写检查：两两比较相似度
         spell_warnings = self._detect_spelling_errors(list(raw_stats.keys()))
 
@@ -73,6 +82,10 @@ class LabelStatsDialog(QDialog):
                 item.setToolTip('建议统一拼写')
             self.table.setItem(row, 3, item)
 
+        # 双击行 → 跳转到包含该标签的图片
+        if self._on_jump_to:
+            self.table.cellDoubleClicked.connect(self._on_row_double_clicked)
+
         layout.addWidget(self.table)
 
         # 底部按钮
@@ -82,6 +95,16 @@ class LabelStatsDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         btn_layout.addWidget(close_btn)
         layout.addLayout(btn_layout)
+
+    def _on_row_double_clicked(self, row, _column):
+        """双击行：跳转到该标签所在的第一个张图片。"""
+        label = self._row_labels[row]
+        images = self._stats[label]['images']
+        if images:
+            first_img = next(iter(images))
+            if self._on_jump_to:
+                self._on_jump_to(first_img)
+            self.accept()
 
     @staticmethod
     def _detect_spelling_errors(labels):

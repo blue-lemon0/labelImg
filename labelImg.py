@@ -8,6 +8,7 @@ import shutil
 import sys
 import webbrowser as wb
 from functools import partial
+from collections import defaultdict
 
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
@@ -36,7 +37,7 @@ from libs.create_ml_io import CreateMLReader
 from libs.create_ml_io import JSON_EXT
 from libs.ustr import ustr
 from libs.hashableQListWidgetItem import HashableQListWidgetItem
-from libs.labelStats import LabelStatsDialog, scan_label_statistics
+from libs.labelStats import LabelStatsDialog, scan_single_annotation
 
 __appname__ = 'labelImg'
 
@@ -149,6 +150,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.last_open_dir = None
         self.cur_img_idx = 0
         self.img_count = len(self.m_img_list)
+
+        # 过滤翻页状态：None / label字符串 / '__empty__'
+        self._nav_filter = None
+        self._label_to_indices = {}
+        self._img_label_map = {}  # {img_path: {label: box_count}}
+        self._stats_cache = None  # {label: {'box_count': int, 'image_count': int, 'images': set}}
 
         # 是否需要保存
         self.dirty = False
@@ -357,6 +364,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.shapeMoved.connect(self.set_dirty)
         self.canvas.selectionChanged.connect(self.shape_selection_changed)
         self.canvas.drawingPolygon.connect(self.toggle_drawing_sensitive)
+        self.canvas.installEventFilter(self)
 
         self.setCentralWidget(scroll)
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
@@ -597,15 +605,16 @@ class MainWindow(QMainWindow, WindowMixin):
                     (open, open_dir, change_save_dir, open_annotation, copy_prev_bounding, self.menus.recentFiles, save, save_format, save_as, close, reset_all, delete_image, quit))
         add_actions(self.menus.help, (help_default, show_info, show_shortcut))
 
-        # 标签统计
+        # 标签统计 — 独立菜单栏项，放在帮助后面
         label_stats_action = action('标签统计', self.show_label_stats,
-                                    'Ctrl+T', 'labels', '统计当前数据集中的标签分布')
+                                    'Ctrl+T', None, '统计当前数据集中的标签分布')
+        self.menuBar().addAction(label_stats_action)
+
         add_actions(self.menus.view, (
             self.auto_saving,
             self.single_class_mode,
             self.display_label_option,
             labels, advanced_mode, None,
-            label_stats_action, None,
             hide_all, show_all, None,
             zoom_in, zoom_out, zoom_org, None,
             fit_window, fit_width, None,
@@ -638,14 +647,21 @@ class MainWindow(QMainWindow, WindowMixin):
         if event.key() == Qt.Key_Control:
             # 按住 Ctrl 时绘制正方形
             self.canvas.set_drawing_shape_to_square(True)
+        elif event.key() == Qt.Key_Escape and self._nav_filter is not None:
+            # Esc 退出过滤翻页模式
+            self._clear_label_filter()
 
     def eventFilter(self, obj, event):
-        """在子控件（如 QListWidget）消费前拦截快捷键。
+        """在子控件（如 QListWidget、Canvas）消费前拦截快捷键。
 
         复用与 Canvas.keyPressEvent 相同的 KEY_BINDINGS 表，
         按键与逻辑保持解耦。
         """
         if event.type() == QEvent.KeyPress:
+            # 过滤翻页中 Esc → 退出过滤
+            if event.key() == Qt.Key_Escape and self._nav_filter is not None:
+                self._clear_label_filter()
+                return True
             shift = event.modifiers() & Qt.ShiftModifier
             action = KEY_BINDINGS.get((event.key(), shift))
             if action is not None:
@@ -1302,7 +1318,11 @@ class MainWindow(QMainWindow, WindowMixin):
         """
         Converts image counter to string representation.
         """
-        return '[{} / {}]'.format(self.cur_img_idx + 1, self.img_count)
+        base = '[{} / {}]'.format(self.cur_img_idx + 1, self.img_count)
+        if self._nav_filter is not None:
+            label_display = self._nav_filter if self._nav_filter else '(空标签)'
+            base += ' [筛选: {}]'.format(label_display)
+        return base
 
     def show_bounding_box_from_annotation_file(self, file_path, replace=True):
         if self.default_save_dir is not None:
@@ -1439,6 +1459,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self.default_save_dir = dir_path
             self.update_path_info()
             self._refresh_all_file_colors()
+            # 缓存已失效，下次打开统计面板时重新扫描
+            self._stats_cache = None
+            self._clear_label_filter()
+            self._build_label_index()
 
         if self.file_path is not None:
             self.show_bounding_box_from_annotation_file(self.file_path)
@@ -1539,6 +1563,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_list_widget.clear()
         self.m_img_list = self.scan_all_images(dir_path)
         self.img_count = len(self.m_img_list)
+        self._clear_label_filter()
+        self._build_label_index()
         self.open_next_image()
         for imgPath in self.m_img_list:
             relative = os.path.relpath(imgPath, dir_path) if dir_path else imgPath
@@ -1589,6 +1615,11 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.file_path is None:
             return
 
+        # 过滤翻页模式
+        if self._nav_filter is not None:
+            self._advance_in_filter(-1)
+            return
+
         if self.cur_img_idx - 1 >= 0:
             self.cur_img_idx -= 1
             filename = self.m_img_list[self.cur_img_idx]
@@ -1612,6 +1643,11 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         
         if not self.m_img_list:
+            return
+
+        # 过滤翻页模式
+        if self._nav_filter is not None:
+            self._advance_in_filter(+1)
             return
 
         filename = None
@@ -1681,6 +1717,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if annotation_file_path and self.save_labels(annotation_file_path):
             self.set_clean()
             self._apply_file_color(self.file_path)
+            self._update_index_for_current_image()
         self.status('Saved to  %s' % annotation_file_path)
 
     def _apply_file_color(self, img_path):
@@ -1905,18 +1942,211 @@ class MainWindow(QMainWindow, WindowMixin):
     # ---------------------------------------------------------------------------
 
     def show_label_stats(self):
-        """打开标签统计对话框，全量扫描数据集并展示。"""
+        """打开标签统计对话框（优先使用缓存，免去全量重扫）。"""
         if not self.m_img_list:
             QMessageBox.information(self, '提示', '请先打开一个图片目录。')
             return
 
-        stats = scan_label_statistics(self.m_img_list, self.default_save_dir)
-        if not stats:
+        # 首次打开或缓存无效时执行全量扫描
+        if self._stats_cache is None:
+            self.status('正在扫描标注文件…')
+            from libs.labelStats import scan_label_statistics
+            self._stats_cache = scan_label_statistics(self.m_img_list, self.default_save_dir)
+
+        if not self._stats_cache:
             QMessageBox.information(self, '提示', '数据集中未找到标注文件。')
             return
 
-        dialog = LabelStatsDialog(stats, self, on_jump_to=self.load_file)
+        dialog = LabelStatsDialog(self._stats_cache, self,
+                                  on_jump_to=self.load_file,
+                                  on_navigate=self._activate_label_filter,
+                                  total_img_count=len(self.m_img_list))
         dialog.exec_()
+
+    # ---------------------------------------------------------------------------
+    # 过滤翻页（标签导航）
+    # ---------------------------------------------------------------------------
+
+    def _activate_label_filter(self, label_name):
+        """用户点击【导航】：激活过滤翻页模式。
+        如果当前已在过滤该标签 → 清除过滤（即 toggle）。
+        如果当前图片不包含该标签，自动跳到第一张匹配的图片。
+        """
+        # 点击已激活的标签 → 清除过滤
+        if self._nav_filter == label_name:
+            self._clear_label_filter()
+            return
+
+        self._nav_filter = label_name
+        self._update_title_counter()
+
+        # 当前图片没有该标签 → 跳到第一张匹配的
+        indices = self._label_to_indices.get(label_name, [])
+        if indices and self.cur_img_idx not in indices:
+            target_idx = indices[0]
+            self.cur_img_idx = target_idx
+            filename = self.m_img_list[self.cur_img_idx]
+            if filename:
+                self.load_file(filename)
+                self._update_title_counter()
+
+    def _clear_label_filter(self):
+        """退出过滤翻页模式，恢复普通翻页。"""
+        if self._nav_filter is not None:
+            self._nav_filter = None
+            self._update_title_counter()
+
+    def _update_title_counter(self):
+        """刷新窗口和文件停靠面板上的计数器显示。"""
+        if self.file_path:
+            counter = self.counter_str()
+            self.setWindowTitle(__appname__ + ' ' + self.file_path + ' ' + counter)
+            self.file_dock.setWindowTitle(self._file_dock_base + ' ' + counter)
+
+    def _advance_in_filter(self, direction):
+        """在过滤翻页中前进 (direction=+1) 或后退 (direction=-1)。"""
+        indices = self._label_to_indices.get(self._nav_filter, [])
+        if not indices:
+            self._clear_label_filter()
+            self.status('该标签没有匹配的图片', 3000)
+            return
+
+        cur = self.cur_img_idx
+        # 二分查找当前位置在过滤列表中的索引
+        import bisect
+        pos = bisect.bisect_left(indices, cur)
+
+        if direction > 0:
+            # 前进：找下一个严格大于 cur 的索引
+            next_pos = pos
+            while next_pos < len(indices) and indices[next_pos] <= cur:
+                next_pos += 1
+            if next_pos < len(indices):
+                target_idx = indices[next_pos]
+            else:
+                # 到尾了，回到第一个
+                target_idx = indices[0]
+        else:
+            # 后退：找上一个严格小于 cur 的索引
+            prev_pos = pos - 1
+            while prev_pos >= 0 and indices[prev_pos] >= cur:
+                prev_pos -= 1
+            if prev_pos >= 0:
+                target_idx = indices[prev_pos]
+            else:
+                # 到头了，回到最后一个
+                target_idx = indices[-1]
+
+        if target_idx != cur:
+            self.cur_img_idx = target_idx
+            filename = self.m_img_list[self.cur_img_idx]
+            if filename:
+                self.load_file(filename)
+                self._update_title_counter()
+        else:
+            if len(indices) == 1:
+                self.status('该标签仅此 1 张图片，无法翻页', 3000)
+            else:
+                self.status('过滤导航：已在首/尾，循环回到当前', 3000)
+
+    def _build_label_index(self):
+        """全量扫描数据集，构建索引和缓存：_label_to_indices / _img_label_map / _stats_cache。"""
+        self._img_label_map = {}
+        self._label_to_indices = {}
+        stats = defaultdict(lambda: {'box_count': 0, 'image_count': 0, 'images': set()})
+
+        for idx, img_path in enumerate(self.m_img_list):
+            labels = scan_single_annotation(img_path, self.default_save_dir)
+            if labels:
+                self._img_label_map[img_path] = labels
+                for label, count in labels.items():
+                    if label not in self._label_to_indices:
+                        self._label_to_indices[label] = []
+                    self._label_to_indices[label].append(idx)
+                    stats[label]['box_count'] += count
+                    stats[label]['image_count'] = len(stats[label]['images']) + 1
+                    stats[label]['images'].add(img_path)
+            # 处理旧标注被清空的情况：img_label_map 中无此记录
+
+        # 重建 image_count（从 images set 长度）
+        self._stats_cache = {}
+        for label, info in stats.items():
+            self._stats_cache[label] = {
+                'box_count': info['box_count'],
+                'image_count': len(info['images']),
+                'images': info['images'],
+            }
+
+    def _update_index_for_current_image(self):
+        """保存后增量更新索引：只重扫当前图片，更新 _img_label_map / _label_to_indices / _stats_cache。
+
+        在 _save_file() 成功后调用。
+        """
+        if not self.file_path or not self.m_img_list:
+            return
+
+        img_path = self.file_path
+        try:
+            cur_idx = self.m_img_list.index(img_path)
+        except ValueError:
+            return
+
+        # 扫描当前标注文件的最新状态
+        new_labels = scan_single_annotation(img_path, self.default_save_dir)
+        old_labels = self._img_label_map.get(img_path, {})
+
+        # 更新 _img_label_map
+        if new_labels:
+            self._img_label_map[img_path] = new_labels
+        elif img_path in self._img_label_map:
+            del self._img_label_map[img_path]
+
+        # 更新 _label_to_indices
+        old_label_set = set(old_labels.keys())
+        new_label_set = set(new_labels.keys())
+
+        for label in old_label_set - new_label_set:
+            # 该标签不再包含此图片
+            indices = self._label_to_indices.get(label)
+            if indices and cur_idx in indices:
+                indices.remove(cur_idx)
+                if not indices:
+                    del self._label_to_indices[label]
+
+        for label in new_label_set - old_label_set:
+            # 该标签新增此图片
+            self._label_to_indices.setdefault(label, []).append(cur_idx)
+            self._label_to_indices[label].sort()
+
+        # 更新 _stats_cache
+        for label in old_label_set - new_label_set:
+            info = self._stats_cache.get(label)
+            if info:
+                old_count = old_labels[label]
+                info['box_count'] -= old_count
+                info['images'].discard(img_path)
+                info['image_count'] = len(info['images'])
+                if info['box_count'] <= 0 or info['image_count'] <= 0:
+                    del self._stats_cache[label]
+
+        for label in new_label_set - old_label_set:
+            info = self._stats_cache.setdefault(label, {
+                'box_count': 0, 'image_count': 0, 'images': set()
+            })
+            count = new_labels[label]
+            info['box_count'] += count
+            info['images'].add(img_path)
+            info['image_count'] = len(info['images'])
+
+        # 两集合共有的标签：box_count 可能变化
+        for label in old_label_set & new_label_set:
+            old_count = old_labels[label]
+            new_count = new_labels[label]
+            if old_count != new_count:
+                info = self._stats_cache.get(label)
+                if info:
+                    info['box_count'] += (new_count - old_count)
+
 
 def inverted(color):
     return QColor(*[255 - v for v in color.getRgb()])

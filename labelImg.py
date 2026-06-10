@@ -165,7 +165,98 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             print("Not find:/data/predefined_classes.txt (optional)")
 
-        # 主控件及相关状态
+        self._setup_ui_widgets()
+        self._create_actions_and_menus()
+
+        self.status_manager = StatusManager(self.statusBar())
+        self.status_manager.show('%s started.' % __appname__)
+
+        # 应用程序状态
+        self.image = QImage()
+        self.file_path = ustr(default_filename)
+        self.last_open_dir = None
+        self.recent_files = []
+        self.max_recent = 7
+        self.line_color = None
+        self.fill_color = None
+        self.zoom_level = 100
+        self.fit_window = False
+        # Chris 添加：difficult 标记
+        self.difficult = False
+
+        if settings.get(SETTING_RECENT_FILES):
+            self.recent_files = settings.get(SETTING_RECENT_FILES)
+
+        size = settings.get(SETTING_WIN_SIZE, QSize(600, 500))
+        position = QPoint(0, 0)
+        saved_position = settings.get(SETTING_WIN_POSE, position)
+        # 修复多显示器问题
+        for i in range(QApplication.desktop().screenCount()):
+            if QApplication.desktop().availableGeometry(i).contains(saved_position):
+                position = saved_position
+                break
+        self.resize(size)
+        self.move(position)
+
+        save_dir = ustr(settings.get(SETTING_SAVE_DIR, None))
+        self.last_open_dir = ustr(settings.get(SETTING_LAST_OPEN_DIR, None))
+        if self.default_save_dir is None and save_dir is not None and os.path.exists(save_dir):
+            self.default_save_dir = save_dir
+
+        self.update_path_info()
+
+        self.restoreState(settings.get(SETTING_WIN_STATE, QByteArray()))
+        Shape.line_color = self.line_color = QColor(settings.get(SETTING_LINE_COLOR, DEFAULT_LINE_COLOR))
+        Shape.fill_color = self.fill_color = QColor(settings.get(SETTING_FILL_COLOR, DEFAULT_FILL_COLOR))
+        self.canvas.set_drawing_color(self.line_color)
+        # Chris 添加：difficult 标记
+        Shape.difficult = self.difficult
+
+        def xbool(x):
+            if isinstance(x, QVariant):
+                return x.toBool()
+            return bool(x)
+
+        if xbool(settings.get(SETTING_ADVANCE_MODE, False)):
+            self.actions.advancedMode.setChecked(True)
+            self.toggle_advanced_mode()
+
+        # 动态填充最近文件菜单
+        self.update_file_menu()
+
+        # 加载文件可能耗时，放入队列异步执行
+        if self.file_path and os.path.isdir(self.file_path):
+            self.queue_event(partial(self.import_dir_images, self.file_path or ""))
+        elif self.file_path:
+            self.queue_event(partial(self.load_file, self.file_path or ""))
+        elif self.last_open_dir and os.path.isdir(self.last_open_dir):
+            self.queue_event(partial(self.import_dir_images, self.last_open_dir))
+
+        # 回调绑定
+        self.zoom_widget.valueChanged.connect(self.paint_canvas)
+        self.light_widget.valueChanged.connect(self.paint_canvas)
+
+        self.populate_mode_actions()
+
+        # 在状态栏右侧显示鼠标坐标
+        self.label_coordinates = QLabel('')
+        self.statusBar().addPermanentWidget(self.label_coordinates)
+
+        # 如果启动时传入的是目录，直接打开
+        if self.file_path and os.path.isdir(self.file_path):
+            self.open_dir_dialog(dir_path=self.file_path, silent=True)
+
+        # 全局事件过滤器：在子控件之前拦截自定义快捷键
+        self.installEventFilter(self)
+
+    # ---------------------------------------------------------------------------
+    # UI 构建：控件、停靠面板、画布
+    # ---------------------------------------------------------------------------
+
+    def _setup_ui_widgets(self):
+        """创建主界面控件（标签列表、画布、停靠面板等）。"""
+        get_str = lambda sid: self.string_bundle.get_string(sid)
+
         self.label_dialog = LabelDialog(parent=self, list_item=self.label_hist)
 
         self.items_to_shapes = {}
@@ -226,8 +317,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_list.itemChanged.connect(self.label_item_changed)
         list_layout.addWidget(self.label_list)
 
-
-
         self.dock = QDockWidget(get_str('boxLabelText'), self)
         self.dock.setObjectName(get_str('labels'))
         self.dock.setWidget(label_list_container)
@@ -251,7 +340,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas = Canvas(parent=self)
         self.canvas.zoomRequest.connect(self.zoom_request)
         self.canvas.lightRequest.connect(self.light_request)
-        self.canvas.set_drawing_shape_to_square(settings.get(SETTING_DRAW_SQUARE, False))
+        self.canvas.set_drawing_shape_to_square(self.settings.get(SETTING_DRAW_SQUARE, False))
 
         scroll = QScrollArea()
         scroll.setWidget(self.canvas)
@@ -276,8 +365,16 @@ class MainWindow(QMainWindow, WindowMixin):
         self.dock_features = QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
         self.dock.setFeatures(self.dock.features() ^ self.dock_features)
 
-        # 创建所有 Action
+    # ---------------------------------------------------------------------------
+    # 创建所有 Action + 菜单栏/工具栏
+    # ---------------------------------------------------------------------------
+
+    def _create_actions_and_menus(self):
+        """创建所有 Action 并组装菜单栏、工具栏、右键菜单、快捷键。"""
+        get_str = lambda sid: self.string_bundle.get_string(sid)
+        settings = self.settings
         action = partial(new_action, self)
+
         quit = action(get_str('quit'), self.close,
                       'Ctrl+Q', 'quit', get_str('quitApp'))
 
@@ -308,9 +405,7 @@ class MainWindow(QMainWindow, WindowMixin):
                       'Ctrl+S', 'save', get_str('saveDetail'), enabled=False)
 
         def get_format_meta(format):
-            """
-            返回 (标题, 图标名) 元组
-            """
+            """返回 (标题, 图标名) 元组"""
             if format == LabelFileFormat.PASCAL_VOC:
                 return '&PascalVOC', 'format_voc'
             elif format == LabelFileFormat.YOLO:
@@ -528,87 +623,6 @@ class MainWindow(QMainWindow, WindowMixin):
             open, open_dir, change_save_dir, open_next_image, open_prev_image, save, save_format, None,
             create_mode, edit_mode, None,
             hide_all, show_all)
-
-        self.status_manager = StatusManager(self.statusBar())
-        self.status_manager.show('%s started.' % __appname__)
-
-        # 应用程序状态
-        self.image = QImage()
-        self.file_path = ustr(default_filename)
-        self.last_open_dir = None
-        self.recent_files = []
-        self.max_recent = 7
-        self.line_color = None
-        self.fill_color = None
-        self.zoom_level = 100
-        self.fit_window = False
-        # Chris 添加：difficult 标记
-        self.difficult = False
-
-        if settings.get(SETTING_RECENT_FILES):
-            self.recent_files = settings.get(SETTING_RECENT_FILES)
-
-        size = settings.get(SETTING_WIN_SIZE, QSize(600, 500))
-        position = QPoint(0, 0)
-        saved_position = settings.get(SETTING_WIN_POSE, position)
-        # 修复多显示器问题
-        for i in range(QApplication.desktop().screenCount()):
-            if QApplication.desktop().availableGeometry(i).contains(saved_position):
-                position = saved_position
-                break
-        self.resize(size)
-        self.move(position)
-
-        save_dir = ustr(settings.get(SETTING_SAVE_DIR, None))
-        self.last_open_dir = ustr(settings.get(SETTING_LAST_OPEN_DIR, None))
-        if self.default_save_dir is None and save_dir is not None and os.path.exists(save_dir):
-            self.default_save_dir = save_dir
-
-        self.update_path_info()
-
-        self.restoreState(settings.get(SETTING_WIN_STATE, QByteArray()))
-        Shape.line_color = self.line_color = QColor(settings.get(SETTING_LINE_COLOR, DEFAULT_LINE_COLOR))
-        Shape.fill_color = self.fill_color = QColor(settings.get(SETTING_FILL_COLOR, DEFAULT_FILL_COLOR))
-        self.canvas.set_drawing_color(self.line_color)
-        # Chris 添加：difficult 标记
-        Shape.difficult = self.difficult
-
-        def xbool(x):
-            if isinstance(x, QVariant):
-                return x.toBool()
-            return bool(x)
-
-        if xbool(settings.get(SETTING_ADVANCE_MODE, False)):
-            self.actions.advancedMode.setChecked(True)
-            self.toggle_advanced_mode()
-
-        # 动态填充最近文件菜单
-        self.update_file_menu()
-
-        # 加载文件可能耗时，放入队列异步执行
-        if self.file_path and os.path.isdir(self.file_path):
-            self.queue_event(partial(self.import_dir_images, self.file_path or ""))
-        elif self.file_path:
-            self.queue_event(partial(self.load_file, self.file_path or ""))
-        elif self.last_open_dir and os.path.isdir(self.last_open_dir):
-            self.queue_event(partial(self.import_dir_images, self.last_open_dir))
-
-        # 回调绑定
-        self.zoom_widget.valueChanged.connect(self.paint_canvas)
-        self.light_widget.valueChanged.connect(self.paint_canvas)
-
-        self.populate_mode_actions()
-
-        # 在状态栏右侧显示鼠标坐标
-        self.label_coordinates = QLabel('')
-        self.statusBar().addPermanentWidget(self.label_coordinates)
-
-        # 如果启动时传入的是目录，直接打开
-        if self.file_path and os.path.isdir(self.file_path):
-            self.open_dir_dialog(dir_path=self.file_path, silent=True)
-
-        # 全局事件过滤器：在子控件之前拦截自定义快捷键
-        self.installEventFilter(self)
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Control:

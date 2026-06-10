@@ -112,6 +112,13 @@ class Canvas(QWidget):
     def isVisible(self, shape):
         return self.visible.get(shape, True)
 
+    def _show_width_height(self, w, h, x, y):
+        """更新状态栏：标注宽高 + 鼠标坐标。"""
+        if self._main_window is None:
+            self._main_window = self.parent().window()
+        self._main_window.label_coordinates.setText(
+            'Width: %d, Height: %d / X: %d; Y: %d' % (w, h, x, y))
+
     def drawing(self):
         """是否处于绘制模式。"""
         return self.mode == self.CREATE
@@ -159,10 +166,10 @@ class Canvas(QWidget):
             self.override_cursor(CURSOR_DRAW)
             if self.current:
                 # 显示标注宽高
-                current_width = abs(self.current[0].x() - pos.x())
-                current_height = abs(self.current[0].y() - pos.y())
-                win.label_coordinates.setText(
-                        'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
+                self._show_width_height(
+                    abs(self.current[0].x() - pos.x()),
+                    abs(self.current[0].y() - pos.y()),
+                    pos.x(), pos.y())
 
                 color = self.drawing_line_color
                 if self.out_of_pixmap(pos):
@@ -216,25 +223,20 @@ class Canvas(QWidget):
                 self.repaint()
 
                 # 拖动顶点时显示宽高
-                point1 = self.h_shape[1]
-                point3 = self.h_shape[3]
-                current_width = abs(point1.x() - point3.x())
-                current_height = abs(point1.y() - point3.y())
-                win.label_coordinates.setText(
-                        'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
+                self._show_width_height(
+                    abs(self.h_shape[1].x() - self.h_shape[3].x()),
+                    abs(self.h_shape[1].y() - self.h_shape[3].y()),
+                    pos.x(), pos.y())
             elif self.selected_shape and self.prev_point:
                 self.override_cursor(CURSOR_MOVE)
                 self.bounded_move_shape(self.selected_shape, pos)
                 self.shapeMoved.emit()
                 self.repaint()
 
-                # 移动标注时显示宽高
-                point1 = self.selected_shape[1]
-                point3 = self.selected_shape[3]
-                current_width = abs(point1.x() - point3.x())
-                current_height = abs(point1.y() - point3.y())
-                win.label_coordinates.setText(
-                        'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
+                self._show_width_height(
+                    abs(self.selected_shape[1].x() - self.selected_shape[3].x()),
+                    abs(self.selected_shape[1].y() - self.selected_shape[3].y()),
+                    pos.x(), pos.y())
             else:
                 # 左键拖拽空白区域 → 平移
                 delta = ev.pos() - self.pan_initial_pos
@@ -265,12 +267,10 @@ class Canvas(QWidget):
                 self.update()
 
                 # 悬浮时在状态栏显示标注宽高
-                point1 = self.h_shape[1]
-                point3 = self.h_shape[3]
-                current_width = abs(point1.x() - point3.x())
-                current_height = abs(point1.y() - point3.y())
-                win.label_coordinates.setText(
-                        'Width: %d, Height: %d / X: %d; Y: %d' % (current_width, current_height, pos.x(), pos.y()))
+                self._show_width_height(
+                    abs(self.h_shape[1].x() - self.h_shape[3].x()),
+                    abs(self.h_shape[1].y() - self.h_shape[3].y()),
+                    pos.x(), pos.y())
                 break
         else:  # 什么都没碰到 → 清除高亮，重置光标
             if self.h_shape:
@@ -450,18 +450,11 @@ class Canvas(QWidget):
 
         shape.move_vertex_by(index, shift_pos)
 
-        left_index = (index + 1) % 4
-        right_index = (index + 3) % 4
-        left_shift = None
-        right_shift = None
-        if index % 2 == 0:
-            right_shift = QPointF(shift_pos.x(), 0)
-            left_shift = QPointF(0, shift_pos.y())
-        else:
-            left_shift = QPointF(shift_pos.x(), 0)
-            right_shift = QPointF(0, shift_pos.y())
-        shape.move_vertex_by(right_index, right_shift)
-        shape.move_vertex_by(left_index, left_shift)
+        left_idx = (index + 1) % 4
+        right_idx = (index + 3) % 4
+        right_shift, left_shift = self._adjacent_shifts(index, shift_pos)
+        shape.move_vertex_by(right_idx, right_shift)
+        shape.move_vertex_by(left_idx, left_shift)
 
     def bounded_move_shape(self, shape, pos):
         """鼠标拖拽整个标注：保持其不超出图片边界。"""
@@ -826,18 +819,22 @@ class Canvas(QWidget):
             return
         self._apply_move_step(QPointF(dx, dy))
 
+    def _adjacent_shifts(self, index, step):
+        """计算相邻顶点偏移量以保持矩形。
+        return: (right_shift, left_shift) 分别用于 (index+3)%4 和 (index+1)%4。
+        """
+        if index % 2 == 0:
+            return QPointF(step.x(), 0), QPointF(0, step.y())   # 右邻水平移，左邻垂直移
+        else:
+            return QPointF(0, step.y()), QPointF(step.x(), 0)   # 右邻垂直移，左邻水平移
+
     def _move_vertex(self, index, step):
         """移动单个角点，同时调整相邻两点以保持矩形。
         逻辑与 bounded_move_vertex() 一致。"""
         shape = self.selected_shape
         left_idx = (index + 1) % 4
         right_idx = (index + 3) % 4
-        if index % 2 == 0:
-            right_shift = QPointF(step.x(), 0)
-            left_shift = QPointF(0, step.y())
-        else:
-            left_shift = QPointF(step.x(), 0)
-            right_shift = QPointF(0, step.y())
+        right_shift, left_shift = self._adjacent_shifts(index, step)
         shape.move_vertex_by(index, step)
         shape.move_vertex_by(right_idx, right_shift)
         shape.move_vertex_by(left_idx, left_shift)
@@ -849,12 +846,7 @@ class Canvas(QWidget):
 
         left_idx = (index + 1) % 4
         right_idx = (index + 3) % 4
-        if index % 2 == 0:
-            right_shift = QPointF(step.x(), 0)
-            left_shift = QPointF(0, step.y())
-        else:
-            left_shift = QPointF(step.x(), 0)
-            right_shift = QPointF(0, step.y())
+        right_shift, left_shift = self._adjacent_shifts(index, step)
 
         new_points[index] += step
         new_points[right_idx] += right_shift
@@ -898,11 +890,7 @@ class Canvas(QWidget):
 
     def reset_all_lines(self):
         """重置所有标注（撤销所有并清除当前）。"""
-        assert self.shapes
-        self.current = self.shapes.pop()
-        self.current.set_open()
-        self.line.points = [self.current[-1], self.current[0]]
-        self.drawingPolygon.emit(True)
+        self.undo_last_line()
         self.current = None
         self.drawingPolygon.emit(False)
         self.update()

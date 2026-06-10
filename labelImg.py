@@ -1206,12 +1206,13 @@ class MainWindow(QMainWindow, WindowMixin):
         unicode_file_path = ustr(file_path)
         unicode_file_path = os.path.abspath(unicode_file_path)
         # Tzutalin 20160906 : Add file list and dock to move faster
-        # Highlight the file item
+        # Highlight the file item and scroll to it
         if unicode_file_path and self.file_list_widget.count() > 0:
             if unicode_file_path in self.m_img_list:
                 index = self.m_img_list.index(unicode_file_path)
                 file_widget_item = self.file_list_widget.item(index)
                 file_widget_item.setSelected(True)
+                self.file_list_widget.scrollToItem(file_widget_item, QAbstractItemView.PositionAtCenter)
             else:
                 self.file_list_widget.clear()
                 self.m_img_list.clear()

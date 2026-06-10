@@ -590,6 +590,8 @@ class MainWindow(QMainWindow, WindowMixin):
             self.queue_event(partial(self.import_dir_images, self.file_path or ""))
         elif self.file_path:
             self.queue_event(partial(self.load_file, self.file_path or ""))
+        elif self.last_open_dir and os.path.isdir(self.last_open_dir):
+            self.queue_event(partial(self.import_dir_images, self.last_open_dir))
 
         # Callbacks:
         self.zoom_widget.valueChanged.connect(self.paint_canvas)
@@ -1465,7 +1467,8 @@ class MainWindow(QMainWindow, WindowMixin):
             target_dir_path = ustr(default_open_dir_path)
         self.last_open_dir = target_dir_path
         self.import_dir_images(target_dir_path)
-        self.default_save_dir = target_dir_path
+        if self.default_save_dir is None:
+            self.default_save_dir = target_dir_path
         self.update_path_info()
         if self.file_path:
             self.show_bounding_box_from_annotation_file(file_path=self.file_path)

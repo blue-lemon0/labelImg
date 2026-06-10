@@ -616,10 +616,21 @@ class Canvas(QWidget):
         w, h = self.pixmap.width(), self.pixmap.height()
         return not (0 <= p.x() <= w and 0 <= p.y() <= h)
 
+    MIN_BOX_SIZE = 3  # 最小宽/高像素，过小则丢弃
+
     def finalise(self):
         """完成当前标注的绘制：闭合、加入列表、清空当前。"""
         assert self.current
         if self.current.points[0] == self.current.points[-1]:
+            self.current = None
+            self.drawingPolygon.emit(False)
+            self.update()
+            return
+
+        # 丢弃过小的框（比如误点击）
+        xs = [p.x() for p in self.current.points]
+        ys = [p.y() for p in self.current.points]
+        if max(xs) - min(xs) < self.MIN_BOX_SIZE or max(ys) - min(ys) < self.MIN_BOX_SIZE:
             self.current = None
             self.drawingPolygon.emit(False)
             self.update()

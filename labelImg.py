@@ -824,26 +824,38 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def create_shape(self):
         assert self.beginner()
+        if not self.canvas.editing():  # 已就绪画框 → 取消
+            self.canvas.set_editing(True)
+            self.actions.create.setEnabled(True)
+            return
         self.canvas.set_editing(False)
         self.actions.create.setEnabled(False)
 
     def toggle_drawing_sensitive(self, drawing=True):
-        """绘制过程中，禁止切换模式。"""
-        self.actions.editMode.setEnabled(not drawing)
-        if not drawing and self.beginner():
-            # 取消绘制
-            print('Cancel creation.')
-            self.canvas.set_editing(True)
-            self.canvas.restore_cursor()
-            self.actions.create.setEnabled(True)
+        """绘制过程中，禁止切换模式（包括 W 键）。"""
+        if drawing:
+            self.actions.editMode.setEnabled(False)
+            self.actions.createMode.setEnabled(False)  # 拖拽中禁用 W
+        else:
+            self.actions.editMode.setEnabled(True)
+            self.actions.createMode.setEnabled(True)
+            if self.beginner():
+                # 取消绘制
+                print('Cancel creation.')
+                self.canvas.set_editing(True)
+                self.canvas.restore_cursor()
+                self.actions.create.setEnabled(True)
 
     def toggle_draw_mode(self, edit=True):
         self.canvas.set_editing(edit)
-        self.actions.createMode.setEnabled(edit)
+        self.actions.createMode.setEnabled(True)  # W 始终保持可切换
         self.actions.editMode.setEnabled(not edit)
 
     def set_create_mode(self):
         assert self.advanced()
+        if not self.canvas.editing():  # 已在创建模式 → 切回编辑
+            self.set_edit_mode()
+            return
         self.toggle_draw_mode(False)
 
     def set_edit_mode(self):
@@ -1123,6 +1135,8 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.canvas.set_editing(True)
                 self.actions.create.setEnabled(True)
             else:
+                self.canvas.set_editing(True)
+                self.actions.createMode.setEnabled(True)
                 self.actions.editMode.setEnabled(True)
             self.set_dirty()
 

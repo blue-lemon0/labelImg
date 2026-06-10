@@ -1229,6 +1229,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if unicode_file_path and self.file_list_widget.count() > 0:
             if unicode_file_path in self.m_img_list:
                 index = self.m_img_list.index(unicode_file_path)
+                self.cur_img_idx = index
+                self.img_count = len(self.m_img_list)
                 file_widget_item = self.file_list_widget.item(index)
                 file_widget_item.setSelected(True)
                 self.file_list_widget.scrollToItem(file_widget_item, QAbstractItemView.PositionAtCenter)
@@ -1913,7 +1915,7 @@ class MainWindow(QMainWindow, WindowMixin):
             QMessageBox.information(self, '提示', '数据集中未找到标注文件。')
             return
 
-        dialog = LabelStatsDialog(stats, self)
+        dialog = LabelStatsDialog(stats, self, on_jump_to=self.load_file)
         dialog.exec_()
 
 def inverted(color):

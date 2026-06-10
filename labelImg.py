@@ -1474,6 +1474,38 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.file_path:
             self.show_bounding_box_from_annotation_file(file_path=self.file_path)
 
+    def _get_annotation_status(self, img_path):
+        """Check annotation status of an image.
+
+        Returns:
+            0 — no annotation file found
+            1 — file exists but empty (no boxes/labels)
+            2 — file exists with actual annotations
+        """
+        for ext in (XML_EXT, TXT_EXT, JSON_EXT):
+            if self.default_save_dir:
+                basename = os.path.splitext(os.path.basename(img_path))[0]
+                anno_path = os.path.join(self.default_save_dir, basename + ext)
+            else:
+                anno_path = os.path.splitext(img_path)[0] + ext
+
+            if not os.path.isfile(anno_path):
+                continue
+
+            try:
+                with open(anno_path, 'rb') as f:
+                    head = f.read(4096)
+                if ext == XML_EXT:
+                    return 2 if b'<object>' in head else 1
+                elif ext == TXT_EXT:
+                    return 2 if any(l.strip() for l in head.split(b'\n') if l.strip()) else 1
+                else:  # JSON
+                    return 2 if b'"shapes"' in head else 1
+            except OSError:
+                return 0
+
+        return 0
+
     def import_dir_images(self, dir_path):
         if not self.may_continue() or not dir_path:
             return
@@ -1490,6 +1522,12 @@ class MainWindow(QMainWindow, WindowMixin):
             relative = os.path.relpath(imgPath, dir_path) if dir_path else imgPath
             item = QListWidgetItem(relative)
             item.setData(Qt.UserRole, imgPath)
+            status = self._get_annotation_status(imgPath)
+            if status == 0:
+                item.setForeground(QColor('#888888'))
+            elif status == 1:
+                item.setForeground(QColor('#E57373'))
+            # status == 2 → 有标注，用系统默认色，不动
             self.file_list_widget.addItem(item)
 
     def verify_image(self, _value=False):
@@ -1620,7 +1658,25 @@ class MainWindow(QMainWindow, WindowMixin):
     def _save_file(self, annotation_file_path):
         if annotation_file_path and self.save_labels(annotation_file_path):
             self.set_clean()
+            self._refresh_file_item_color()
         self.status('Saved to  %s' % annotation_file_path)
+
+    def _refresh_file_item_color(self):
+        """Update the current image's file list item color after saving."""
+        if not self.file_path:
+            return
+        for i in range(self.file_list_widget.count()):
+            item = self.file_list_widget.item(i)
+            if item.data(Qt.UserRole) == self.file_path:
+                status = self._get_annotation_status(self.file_path)
+                if status == 0:
+                    item.setForeground(QColor('#888888'))
+                elif status == 1:
+                    item.setForeground(QColor('#E57373'))
+                else:
+                    # 有标注 → 重置为系统默认色
+                    item.setForeground(QBrush())
+                break
 
     def close_file(self, _value=False):
         if not self.may_continue():

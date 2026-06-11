@@ -216,6 +216,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_path_info()
 
         self.restoreState(settings.get(SETTING_WIN_STATE, QByteArray()))
+        if settings.get(SETTING_WIN_MAXIMIZED, False):
+            self.setWindowState(self.windowState() | Qt.WindowMaximized)
         Shape.line_color = self.line_color = QColor(settings.get(SETTING_LINE_COLOR, DEFAULT_LINE_COLOR))
         Shape.fill_color = self.fill_color = QColor(settings.get(SETTING_FILL_COLOR, DEFAULT_FILL_COLOR))
         self.canvas.set_drawing_color(self.line_color)
@@ -821,7 +823,79 @@ class MainWindow(QMainWindow, WindowMixin):
         QMessageBox.information(self, u'Information', msg)
 
     def show_shortcuts_dialog(self):
-        self.show_tutorial_dialog(browser='default', link='https://github.com/tzutalin/labelImg#Hotkeys')
+        """显示快捷键速查表。"""
+        shortcuts = []
+
+        # 从 QAction 收集有快捷键的项
+        for action in self.findChildren(QAction):
+            key_seq = action.shortcut()
+            if key_seq.isEmpty():
+                continue
+            text = action.text().replace('&', '')
+            if text:
+                shortcuts.append((text.strip(), key_seq.toString(QKeySequence.NativeText)))
+
+        # Canvas 按键绑定（Z/C/X）
+        desc_map = {
+            'corner_cw': '角点选择（顺时针）',
+            'corner_ccw': '角点选择（逆时针）',
+            'shape_next': '选择下一个标注',
+            'shape_prev': '选择上一个标注',
+        }
+        for (key, shift), action_name in KEY_BINDINGS.items():
+            mod = 'Shift+' if shift else ''
+            key_name = QKeySequence(key).toString()
+            shortcuts.append((desc_map.get(action_name, action_name), mod + key_name))
+
+        # 固定快捷键（非 QAction 方式注册的）
+        extras = [
+            ('下一张图片', 'D'),
+            ('上一张图片', 'A'),
+            ('校验图片', 'Space'),
+            ('完成绘制（闭合）', 'Enter'),
+            ('取消绘制 / 重置角点', 'Esc'),
+            ('方向键移动标注/顶点', '↑ ↓ ← →'),
+            ('加速移动（按住）', 'Shift + 方向键'),
+        ]
+        shortcuts.extend(extras)
+
+        # 去重（按快捷键），保留首次出现的文本
+        seen = set()
+        unique = []
+        for text, key in shortcuts:
+            if key not in seen:
+                seen.add(key)
+                unique.append((text, key))
+
+        # 构建对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle('快捷键')
+        dialog.setMinimumSize(520, 300)
+        dialog.resize(620, 480)
+        layout = QVBoxLayout(dialog)
+
+        table = QTableWidget(len(unique), 2)
+        table.setHorizontalHeaderLabels(['功能', '快捷键'])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.NoSelection)
+
+        for i, (text, key) in enumerate(unique):
+            table.setItem(i, 0, QTableWidgetItem(text))
+            item = QTableWidgetItem(key)
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
+            table.setItem(i, 1, item)
+
+        layout.addWidget(table)
+        close_btn = QPushButton('关闭')
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn, alignment=Qt.AlignCenter)
+
+        dialog.exec_()
 
     def create_shape(self):
         assert self.beginner()
@@ -1484,6 +1558,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         settings[SETTING_WIN_SIZE] = self.size()
         settings[SETTING_WIN_POSE] = self.pos()
+        settings[SETTING_WIN_MAXIMIZED] = self.isMaximized()
         settings[SETTING_WIN_STATE] = self.saveState()
         settings[SETTING_LINE_COLOR] = self.line_color
         settings[SETTING_FILL_COLOR] = self.fill_color

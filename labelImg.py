@@ -38,7 +38,9 @@ from libs.create_ml_io import CreateMLReader
 from libs.create_ml_io import JSON_EXT
 from libs.ustr import ustr
 from libs.hashableQListWidgetItem import HashableQListWidgetItem
-from libs.labelStats import LabelStatsDialog, scan_single_annotation, resolve_annotation_path
+from libs.labelStats import (LabelStatsDialog, scan_single_annotation,
+                             resolve_annotation_path,
+                             batch_rename_label)
 
 __appname__ = 'labelImg'
 
@@ -2110,11 +2112,28 @@ class MainWindow(QMainWindow, WindowMixin):
             QMessageBox.information(self, '提示', '数据集中未找到标注文件。')
             return
 
+        def _perform_batch_rename(old_label, new_label):
+            """批量重命名回调。"""
+            images = self._stats_cache[old_label]['images']
+            anno_paths = [resolve_annotation_path(img, self.default_save_dir)
+                          for img in images]
+            anno_paths = [p for p in anno_paths if p]
+            modified = batch_rename_label(anno_paths, old_label, new_label)
+            # 重新扫描缓存
+            from libs.labelStats import scan_label_statistics
+            self._stats_cache = scan_label_statistics(self.m_img_list, self.default_save_dir)
+            from libs.labelStats import scan_label_to_indices
+            self._label_to_indices = scan_label_to_indices(self.m_img_list, self.default_save_dir)
+            # 如果当前图片受到影响，直接更新画布和标签列表（不 reload 文件）
+            self._sync_current_after_batch(images, 'rename', old_label, new_label)
+            return True, f'已修改 {modified} 个标注文件', self._stats_cache
+
         dialog = LabelStatsDialog(self._stats_cache, self,
                                   on_jump_to=self.load_file,
                                   total_img_count=len(self.m_img_list),
                                   nav_labels=self._nav_labels,
-                                  master_on=self._nav_active)
+                                  master_on=self._nav_active,
+                                  on_batch_rename=_perform_batch_rename)
         dialog.exec_()
         master_on, checked = dialog.get_nav_state()
         self._nav_labels = checked  # 始终保存勾选状态，不管主开关
@@ -2122,6 +2141,38 @@ class MainWindow(QMainWindow, WindowMixin):
         if master_on and checked:
             self._jump_to_first_nav_image()
         self._update_title_counter()
+
+    def _sync_current_after_batch(self, affected_images, action, *labels):
+        """批量操作后，直接更新当前画布的 shapes 和标签列表，不 reload 文件。
+
+        Args:
+            affected_images: set[str], 受影响的图片路径集合
+            action: 'rename'
+            labels: ('rename', old_label, new_label)
+        """
+        if not self.file_path or not affected_images:
+            return
+        current = os.path.abspath(self.file_path)
+        if current not in {os.path.abspath(p) for p in affected_images}:
+            return
+
+        if action == 'rename':
+            self._batch_rename_on_current(labels[0], labels[1])
+
+    def _batch_rename_on_current(self, old_label, new_label):
+        """重命名当前 canvas 中指定标签的所有 shape，不清除未保存修改。"""
+        renamed = 0
+        for shape in self.canvas.shapes:
+            if shape.label == old_label:
+                shape.label = new_label
+                item = self.shapes_to_items.get(shape)
+                if item:
+                    item.setText(new_label)
+                renamed += 1
+
+        if renamed:
+            self.canvas.update()
+            self.status(f'已将当前图片中 {renamed} 个 "{old_label}" 重命名为 "{new_label}"')
 
     # ---------------------------------------------------------------------------
     # 跳跃翻页（按标签导航）

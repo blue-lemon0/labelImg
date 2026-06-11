@@ -161,7 +161,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # 是否需要保存
         self.dirty = False
-        self._paste_undo_stack = []
+        self._undo_stack = []
 
         self._no_selection_slot = False
         self._beginner = True
@@ -404,7 +404,7 @@ class MainWindow(QMainWindow, WindowMixin):
         open_annotation = action(get_str('openAnnotation'), self.open_annotation_dialog,
                                  'Ctrl+Shift+O', 'open', get_str('openAnnotationDetail'))
         copy_prev_bounding = action(get_str('copyPrevBounding'), self.copy_previous_bounding_boxes, 'Ctrl+v', 'copy', get_str('copyPrevBounding'))
-        undo_paste = action('撤销粘贴', self._undo_paste, 'Ctrl+Z', 'undo', '撤销上一次 Ctrl+V 粘贴')
+        undo = action('撤销', self._undo, 'Ctrl+Z', 'undo', '撤销上一步操作（创建/删除/复制/粘贴）')
 
         open_next_image = action(get_str('nextImg'), self.open_next_image,
                                  'd', 'next', get_str('nextImgDetail'))
@@ -561,7 +561,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # 存储所有 Action 便于后续统一管理
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
-                              lineColor=color1, create=create, delete=delete, edit=edit, copy=copy, undoPaste=undo_paste,
+                              lineColor=color1, create=create, delete=delete, edit=edit, copy=copy, undo=undo,
                               createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode,
                               shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
                               zoom=zoom, zoomIn=zoom_in, zoomOut=zoom_out, zoomOrg=zoom_org,
@@ -572,7 +572,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               fileMenuActions=(
                                   open, open_dir, save, save_as, close, reset_all, quit),
                               beginner=(), advanced=(),
-                              editMenu=(undo_paste, edit, copy, delete,
+                              editMenu=(undo, edit, copy, delete,
                                         None, color1, self.draw_squares_option),
                               beginnerContext=(create, edit, copy, delete),
                               advancedContext=(create_mode, edit_mode, edit, copy,
@@ -829,6 +829,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self.canvas.set_editing(True)
             self.actions.create.setEnabled(True)
             return
+        # 进入绘制模式前快照，撤销时彻底移除刚画的框（不受 finalise 提前入栈影响）
+        self._undo_stack.append(self._snapshot_shapes())
+        if len(self._undo_stack) > 50:
+            self._undo_stack.pop(0)
         self.canvas.set_editing(False)
         self.actions.create.setEnabled(False)
 
@@ -848,6 +852,11 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.actions.create.setEnabled(True)
 
     def toggle_draw_mode(self, edit=True):
+        if not edit:
+            # 进入绘制模式前快照，撤销时彻底移除刚画的框
+            self._undo_stack.append(self._snapshot_shapes())
+            if len(self._undo_stack) > 50:
+                self._undo_stack.pop(0)
         self.canvas.set_editing(edit)
         self.actions.createMode.setEnabled(True)  # W 始终保持可切换
         self.actions.editMode.setEnabled(not edit)
@@ -1100,9 +1109,13 @@ class MainWindow(QMainWindow, WindowMixin):
             return False
 
     def copy_selected_shape(self):
-        self.add_label(self.canvas.copy_selected_shape())
-        # 修复复制后删除的问题
-        self.shape_selection_changed(True)
+        if self.canvas.selected_shape:
+            self._undo_stack.append(self._snapshot_shapes())
+            if len(self._undo_stack) > 50:
+                self._undo_stack.pop(0)
+            self.add_label(self.canvas.copy_selected_shape())
+            # 修复复制后删除的问题
+            self.shape_selection_changed(True)
 
     def combo_selection_changed(self, index):
         text = self.combo_box.cb.itemText(index)
@@ -1619,6 +1632,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.update_path_info()
         self.file_path = None
         self.file_list_widget.clear()
+        self._undo_stack.clear()
         self.m_img_list = self.scan_all_images(dir_path)
         self.img_count = len(self.m_img_list)
         self._clear_nav_mode()
@@ -1874,12 +1888,16 @@ class MainWindow(QMainWindow, WindowMixin):
             self.set_dirty()
 
     def delete_selected_shape(self):
-        self.remove_label(self.canvas.delete_selected())
-        self._validate_label_list()
-        self.set_dirty()
-        if self.no_shapes():
-            for action in self.actions.onShapesPresent:
-                action.setEnabled(False)
+        if self.canvas.selected_shape:
+            self._undo_stack.append(self._snapshot_shapes())
+            if len(self._undo_stack) > 50:
+                self._undo_stack.pop(0)
+            self.remove_label(self.canvas.delete_selected())
+            self._validate_label_list()
+            self.set_dirty()
+            if self.no_shapes():
+                for action in self.actions.onShapesPresent:
+                    action.setEnabled(False)
 
     def choose_shape_line_color(self):
         color = self.color_dialog.getColor(self.line_color, u'Choose Line Color',
@@ -1961,13 +1979,15 @@ class MainWindow(QMainWindow, WindowMixin):
     def copy_previous_bounding_boxes(self):
         current_index = self.m_img_list.index(self.file_path)
         if current_index - 1 >= 0:
-            self._paste_undo_stack.append(self._snapshot_shapes())
+            self._undo_stack.append(self._snapshot_shapes())
+            if len(self._undo_stack) > 50:
+                self._undo_stack.pop(0)
             prev_file_path = self.m_img_list[current_index - 1]
             self.show_bounding_box_from_annotation_file(prev_file_path, replace=False)
             self.save_file()
 
     def _snapshot_shapes(self):
-        """返回当前所有 shape 的可序列化快照，用于粘贴撤销"""
+        """返回当前所有 shape 的可序列化快照，用于撤销。"""
         return [
             (shape.label, [(p.x(), p.y()) for p in shape.points],
              shape.line_color.getRgb() if shape.line_color else None,
@@ -1976,11 +1996,11 @@ class MainWindow(QMainWindow, WindowMixin):
             for shape in self.canvas.shapes
         ]
 
-    def _undo_paste(self):
-        """Ctrl+Z: 撤销上一次 Ctrl+V 粘贴"""
-        if not self._paste_undo_stack:
+    def _undo(self):
+        """Ctrl+Z: 撤销上一步操作（创建/删除/复制/粘贴）。"""
+        if not self._undo_stack:
             return
-        saved = self._paste_undo_stack.pop()
+        saved = self._undo_stack.pop()
         self.label_list.clear()
         self.items_to_shapes.clear()
         self.shapes_to_items.clear()

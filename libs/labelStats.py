@@ -3,7 +3,7 @@
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QCheckBox, QHeaderView, QPushButton,
-                             QWidget, QLabel, QMessageBox)
+                             QWidget, QLabel, QMessageBox, QMenu, QAction, QInputDialog)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from collections import Counter, defaultdict
@@ -24,7 +24,8 @@ class LabelStatsDialog(QDialog):
     TABLE_HEADERS = ['', '标签名', '标注框数', '涉及图片数', '疑似拼写错误']
 
     def __init__(self, stats, parent=None, on_jump_to=None,
-                 total_img_count=0, nav_labels=None, master_on=False):
+                 total_img_count=0, nav_labels=None, master_on=False,
+                 on_batch_rename=None):
         """
         Args:
             stats: dict, {label_name: {'box_count': int, 'image_count': int, 'images': set}}
@@ -32,10 +33,12 @@ class LabelStatsDialog(QDialog):
             total_img_count: 数据集总图片数（含未标注），用于进度显示
             nav_labels: set[str], 当前已勾选的标签集合（用于初始化）
             master_on: bool, 总开关初始状态
+            on_batch_rename: callable(old_label, new_label) → (success, message, new_stats_or_None)
         """
         super(LabelStatsDialog, self).__init__(parent)
         self._stats = stats
         self._on_jump_to = on_jump_to
+        self._on_batch_rename = on_batch_rename
         self._total_img_count = total_img_count
         self._nav_labels = nav_labels or set()  # 当前勾选的标签
         self._master_on = master_on  # 总开关初始状态
@@ -114,6 +117,9 @@ class LabelStatsDialog(QDialog):
         # 双击行 → 跳转到该标签的首张图片
         if self._on_jump_to:
             self.table.cellDoubleClicked.connect(self._on_row_double_clicked)
+        # 右键 → 批量重命名 / 删除
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_table_context_menu)
         self.table.setToolTip('双击任意行可跳转至该标签的首张图片')
 
         # 填充数据（按 box_count 降序）
@@ -166,7 +172,7 @@ class LabelStatsDialog(QDialog):
         layout.addWidget(self.table)
 
         # ── 底部提示 ──
-        hint = QLabel('💡 双击任一行可跳转至该标签的首张图片（对话框将自动关闭）')
+        hint = QLabel('💡 双击任一行可跳转至该标签的首张图片；右键行可批量重命名或删除该标签')
         hint.setStyleSheet('color: #888; padding: 2px 6px; font-size: 12px;')
         layout.addWidget(hint)
 
@@ -250,6 +256,99 @@ class LabelStatsDialog(QDialog):
                     warnings.setdefault(a, []).append(b)
                     warnings.setdefault(b, []).append(a)
         return warnings
+
+    # ── 右键菜单：批量重命名 ──
+
+    def _on_table_context_menu(self, pos):
+        """显示右键菜单：批量重命名当前标签。"""
+        row = self.table.rowAt(pos.y())
+        if row < 0:
+            return
+
+        label = self._row_labels_from_table(row)
+        if label not in self._stats:
+            return
+
+        menu = QMenu(self)
+
+        rename_action = QAction(f'重命名 "{label if label else "(空标签)"}"', self)
+        rename_action.triggered.connect(lambda: self._do_batch_rename(label))
+        menu.addAction(rename_action)
+
+        menu.exec_(self.table.viewport().mapToGlobal(pos))
+
+    def _do_batch_rename(self, old_label):
+        """弹出输入框，执行批量重命名。"""
+        new_label, ok = QInputDialog.getText(
+            self, '批量重命名', f'将 "{old_label}" 重命名为：', text=old_label)
+        if not ok or not new_label or new_label == old_label:
+            return
+
+        if not self._on_batch_rename:
+            QMessageBox.warning(self, '无法完成', '重命名功能不可用（未注册回调）')
+            return
+
+        success, message, new_stats = self._on_batch_rename(old_label, new_label)
+        if success:
+            if new_stats:
+                self._rebuild_table(new_stats)
+            QMessageBox.information(self, '操作成功', message)
+        else:
+            QMessageBox.warning(self, '操作失败', message)
+
+    def _rebuild_table(self, new_stats):
+        """用新的统计数据重建整个表格（批量操作后刷新）。"""
+        self._stats = new_stats
+        # 保存当前勾选状态
+        checked_labels = {l for l, cb in self._label_cbs.items() if cb.isChecked()}
+        self._nav_labels = checked_labels
+
+        # 清空表格
+        self.table.setRowCount(0)
+        self._label_cbs.clear()
+
+        # 重新填充
+        sorted_items = sorted(new_stats.items(),
+                              key=lambda x: (-x[1]['box_count'], x[0]))
+        self.table.setRowCount(len(sorted_items))
+        spell_warnings = self._detect_spelling_errors(list(new_stats.keys()))
+
+        for row, (lbl, info) in enumerate(sorted_items):
+            # 勾选框
+            cb = QCheckBox()
+            cb.setChecked(lbl in checked_labels)
+            cb.toggled.connect(self._on_checkbox_toggled)
+            self._label_cbs[lbl] = cb
+            container = QWidget()
+            cl = QHBoxLayout(container)
+            cl.addWidget(cb)
+            cl.setAlignment(Qt.AlignCenter)
+            cl.setContentsMargins(0, 0, 0, 0)
+            self.table.setCellWidget(row, 0, container)
+            self.table.setItem(row, 0, QTableWidgetItem(''))
+
+            # 标签名
+            display_label = lbl if lbl else '(空标签)'
+            item1 = QTableWidgetItem(display_label)
+            if not lbl:
+                item1.setForeground(QColor('#E57373'))
+                item1.setToolTip('标注框存在但标签名为空')
+            self.table.setItem(row, 1, item1)
+
+            # 标注框数
+            self.table.setItem(row, 2, QTableWidgetItem(str(info['box_count'])))
+            # 涉及图片数
+            self.table.setItem(row, 3, QTableWidgetItem(str(info['image_count'])))
+            # 拼写告警
+            similar = spell_warnings.get(lbl, [])
+            item4 = QTableWidgetItem(', '.join(similar) if similar else '')
+            if similar:
+                item4.setForeground(QColor('#E57373'))
+                item4.setToolTip('建议统一拼写')
+            self.table.setItem(row, 4, item4)
+
+        # 同步全选勾
+        self._on_checkbox_toggled()
 
 
 def resolve_annotation_path(img_path, default_save_dir):
@@ -428,3 +527,110 @@ def _extract_labels_from_json(json_path, img_path):
     except Exception:
         pass
     return []
+
+
+# ──────────────────────────────────────────────
+# 批量重命名 / 删除（供统计面板右键菜单使用）
+# ──────────────────────────────────────────────
+
+
+def batch_rename_label(anno_paths, old_label, new_label):
+    """在多个标注文件中批量重命名标签。
+
+    Args:
+        anno_paths: list[str], 标注文件绝对路径列表
+        old_label: 旧标签名
+        new_label: 新标签名
+
+    Returns:
+        int: 成功修改的文件数
+    """
+    modified = 0
+    for path in anno_paths:
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            if ext == '.xml':
+                if _rename_in_xml(path, old_label, new_label):
+                    modified += 1
+            elif ext == '.txt':
+                if _rename_in_txt(path, old_label, new_label):
+                    modified += 1
+            elif ext == '.json':
+                if _rename_in_json(path, old_label, new_label):
+                    modified += 1
+        except (OSError, IOError):
+            continue
+    return modified
+
+
+def _rename_in_xml(xml_path, old_label, new_label):
+    """在 Pascal VOC XML 中重命名标签。"""
+    from xml.etree import ElementTree
+    tree = ElementTree.parse(xml_path)
+    root = tree.getroot()
+    changed = False
+    for obj in root.findall('object'):
+        name_elem = obj.find('name')
+        if name_elem is not None and name_elem.text == old_label:
+            name_elem.text = new_label
+            changed = True
+    if changed:
+        tree.write(xml_path, encoding=DEFAULT_ENCODING)
+    return changed
+
+
+# ── YOLO TXT ──
+
+
+def _rename_in_txt(txt_path, old_label, new_label):
+    """在 YOLO txt 中重命名标签。
+
+    同目录下的 classes.txt 会被同步更新。
+    """
+    dir_path = os.path.dirname(os.path.abspath(txt_path))
+    classes_file = os.path.join(dir_path, 'classes.txt')
+    if not os.path.isfile(classes_file):
+        return False
+
+    # 读 classes
+    with open(classes_file, 'r', encoding=DEFAULT_ENCODING) as f:
+        classes = [line.strip() for line in f if line.strip()]
+
+    if old_label not in classes:
+        return False
+
+    old_idx = classes.index(old_label)
+    if old_label != new_label:
+        classes[old_idx] = new_label
+
+    # 更新 classes.txt
+    with open(classes_file, 'w', encoding=DEFAULT_ENCODING) as f:
+        for c in classes:
+            f.write(c + '\n')
+
+    # 如果只是改标签名（不改变索引），txt 里的数字行不用改
+    return True
+
+
+# ── CreateML JSON ──
+
+
+def _rename_in_json(json_path, old_label, new_label):
+    """在 CreateML JSON 中重命名标签。"""
+    import json
+    with open(json_path, 'r', encoding=DEFAULT_ENCODING) as f:
+        data = json.load(f)
+    changed = False
+    for entry in data:
+        for ann in entry.get('annotations', []):
+            if ann.get('label') == old_label:
+                ann['label'] = new_label
+                changed = True
+    if changed:
+        with open(json_path, 'w', encoding=DEFAULT_ENCODING) as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    return changed
+
+
+# ── CreateML JSON ──
+

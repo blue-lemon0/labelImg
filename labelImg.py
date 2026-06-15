@@ -518,8 +518,7 @@ class MainWindow(QMainWindow, WindowMixin):
         light_darken = action(get_str('lightdarken'), partial(self.add_light, -10),
                               'Ctrl+Shift+-', 'light_darken', get_str('lightdarkenDetail'), enabled=False)
         light_org = action(get_str('lightreset'), partial(self.set_light, 50),
-                           'Ctrl+Shift+=', 'light_reset', get_str('lightresetDetail'), checkable=True, enabled=False)
-        light_org.setChecked(True)
+                           'Ctrl+Shift+=', 'light_reset', get_str('lightresetDetail'), enabled=False)
 
         # 将亮度控件分组，方便统一启用/禁用
         light_actions = (self.light_widget, light_brighten,
@@ -1369,9 +1368,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.adjust_scale()
 
     def set_light(self, value):
-        self.actions.lightOrg.setChecked(int(value) == 50)
-        # 缩放系数计算可能产生浮点
-        # 转为 int 避免类型错误
         self.light_widget.setValue(int(value))
 
     def add_light(self, increment=10):

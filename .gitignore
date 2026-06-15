@@ -41,8 +41,13 @@ __pycache__/
 .attach*
 tmp.*
 
+# Build artifacts
+dist_win7/
+build_win7/
+
 # Virtual environment
 .venv/
+venv-*/
 
 # Tooling
 .omo/

@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget,
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from collections import Counter, defaultdict
+from typing import Optional
 import difflib
 import os
 
@@ -355,7 +356,7 @@ def resolve_annotation_path(img_path, default_save_dir):
     """查找图片对应的标注文件路径（XML / TXT / JSON），返回第一个找到的。
 
     Returns:
-        str | None: 标注文件绝对路径，或 None。
+        Optional[str]: 标注文件绝对路径，或 None。
     """
     from libs.pascal_voc_io import XML_EXT
     from libs.yolo_io import TXT_EXT

@@ -23,21 +23,49 @@ python labelImg.py [图片路径] [类别文件] [保存目录]
 
 ## 独立可执行文件
 
-编译单文件 `.exe`，对方无需安装 Python。
+编译单文件 `.exe`，对方无需安装 Python。运行环境不同，打包方式不同：
 
-### 系统要求
+| 目标系统 | 构建方式 | Python | 产物 |
+|----------|----------|--------|------|
+| **Windows 8 / 8.1 / 10 / 11** | `pyinstaller labelImg.spec` | 3.13（最新） | `dist/labelImg.exe`（~44 MB） |
+| **Windows 7** | `.\build_win7.ps1` | 3.8 | `dist_win7/labelImg_win7.exe`（~39 MB） |
 
-| 系统 | 支持 |
-|------|------|
-| Windows 10 / 11 (x64) | ✅ |
-| Windows 7 / 8.x | ❌ Python 3.9 起官方停止支持 Win7，`python3*.dll` 依赖 Win8 专有 API（`api-ms-win-core-path-l1-1-0.dll`），无法通过补丁或运行库解决 |
-
-### 构建
+### Win8+ 主流构建
 
 ```bash
 pip install pyinstaller pillow
-pyinstaller labelImg.spec        # 产物 → dist/labelImg.exe（约 44 MB）
+pyinstaller labelImg.spec        # → dist/labelImg.exe
 ```
+
+使用项目主线的 Python 版本，跟随功能更新。
+
+### Win7 兼容构建
+
+> **仅用于首次发布兼容，后续不再积极维护。**
+
+**为什么 Win7 需要单独打包？**  
+Python 3.9 起，python.org 官方 64 位安装包的 `python3*.dll` 导入了 `api-ms-win-core-path-l1-1-0.dll`（提供 `PathCchCombineEx` 等函数）。该 DLL 是 **Windows 8 引入的 API 集**，Win7 不存在，也无法通过补丁添加。因此 Python 3.9~3.13 的 exe 均无法在 Win7 启动。
+
+最后一批不依赖此 API 的官方版本是 **Python 3.8.x**（`python38.dll` 只依赖 `api-ms-win-crt-*`，Win7 可通过 KB2999226 获得 Universal CRT 支持）。
+
+#### 前置条件
+
+1. 安装 [Python 3.8.10](https://www.python.org/downloads/release/python-3810/)（默认路径 `%LOCALAPPDATA%\Programs\Python38`）
+2. 如网络代理较慢，安装前可先配置 pip 镜像
+
+#### 构建
+
+```bash
+.\build_win7.ps1                 # → dist_win7\labelImg_win7.exe（约 39 MB）
+```
+
+脚本会自动创建 venv、安装依赖（PyQt5 5.15.11 + lxml 6.1.1 + PyInstaller + Pillow）并打包。
+
+#### 限制
+
+- Python 3.8 已于 2024 年 10 月终止安全更新
+- 此构建仅打包当前版本，**不会跟随主分支更新功能**
+- 如需新版，需手动在 `build_win7.ps1` 所在目录重新执行一次
 
 ---
 

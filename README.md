@@ -17,20 +17,36 @@ pip install -r requirements.txt
 python labelImg.py [图片路径] [类别文件] [保存目录]
 ```
 
-三个参数均可选，不传则启动后在界面中选择。
+均为可选，缺省则在界面中选择。
 
 ---
 
-## 独立可执行文件
+## 构建与打包
 
-编译单文件 `.exe`，对方无需安装 Python。运行环境不同，打包方式不同：
+编译单文件 `.exe`，对方无需安装 Python。
+
+### 环境准备
+
+前置依赖安装见[快速开始](#快速开始)。
+
+### 编译资源文件
+
+改完 `resources/strings/*.properties` 文案后需重新编译：
+
+```bash
+pyrcc5 -o libs/resources.py resources.qrc
+```
+
+> `libs/resources.py` 已纳入版本管理，改文案后必须重新编译并提交。
+
+### 打包为独立 exe
 
 | 目标系统 | 构建方式 | Python | 产物 |
 |----------|----------|--------|------|
-| **Windows 8 / 8.1 / 10 / 11** | `pyinstaller labelImg.spec` | 3.13（最新） | `dist/labelImg.exe`（~44 MB） |
-| **Windows 7** | `.\build_win7.ps1` | 3.8 | `dist_win7/labelImg_win7.exe`（~39 MB） |
+| **Windows 8 / 8.1 / 10 / 11** | `pyinstaller labelImg.spec` | 3.13（最新） | `dist/labelImg.exe` |
+| **Windows 7** | `build_win7.ps1` | 3.8（独立 venv） | `dist_win7/labelImg_win7.exe` |
 
-### Win8+ 主流构建
+#### Win8+ 主流构建
 
 ```bash
 pip install pyinstaller pillow
@@ -39,7 +55,7 @@ pyinstaller labelImg.spec        # → dist/labelImg.exe
 
 使用项目主线的 Python 版本，跟随功能更新。
 
-### Win7 兼容构建
+#### Win7 兼容构建
 
 > **仅用于首次发布兼容，后续不再积极维护。**
 
@@ -48,24 +64,23 @@ Python 3.9 起，python.org 官方 64 位安装包的 `python3*.dll` 导入了 `
 
 最后一批不依赖此 API 的官方版本是 **Python 3.8.x**（`python38.dll` 只依赖 `api-ms-win-crt-*`，Win7 可通过 KB2999226 获得 Universal CRT 支持）。
 
-#### 前置条件
+**前置条件：** 安装 [Python 3.8.10](https://www.python.org/downloads/release/python-3810/)（默认路径 `%LOCALAPPDATA%\Programs\Python38`）
 
-1. 安装 [Python 3.8.10](https://www.python.org/downloads/release/python-3810/)（默认路径 `%LOCALAPPDATA%\Programs\Python38`）
-2. 如网络代理较慢，安装前可先配置 pip 镜像
+**构建：**
 
-#### 构建
-
-```bash
-.\build_win7.ps1                 # → dist_win7\labelImg_win7.exe（约 39 MB）
+```powershell
+.\build_win7.ps1                   # → dist_win7\labelImg_win7.exe
 ```
 
-脚本会自动创建 venv、安装依赖（PyQt5 5.15.11 + lxml 6.1.1 + PyInstaller + Pillow）并打包。
+如遇执行策略错误（`UnauthorizedAccess`），加 `-ExecutionPolicy Bypass`：
 
-#### 限制
+```powershell
+powershell -ExecutionPolicy Bypass -File build_win7.ps1
+```
 
-- Python 3.8 已于 2024 年 10 月终止安全更新
-- 此构建仅打包当前版本，**不会跟随主分支更新功能**
-- 如需新版，需手动在 `build_win7.ps1` 所在目录重新执行一次
+脚本会自动创建 venv、安装依赖（PyQt5 + lxml + PyInstaller + Pillow）并打包。
+
+**限制：** Python 3.8 已于 2024 年 10 月终止安全更新；此构建仅打包当前版本，不会跟随主分支更新功能。
 
 ---
 
@@ -118,7 +133,7 @@ Python 3.9 起，python.org 官方 64 位安装包的 `python3*.dll` 导入了 `
 | `↑ ↓ ← →` | 移动当前选中的顶点（矩形随之变形）；未选中顶点时移动整个框 |
 | `Esc` | 退出角点模式，回到整体移动 |
 
-长按方向键带 **指数加速**（`KeyAccelerator`），时间越长每 tick 步长越大，粗调细调一把搞定。蓝色高亮圆点指示当前选中的顶点。
+长按方向键带 **指数加速**（`KeyAccelerator`），时间越长每 tick 步长越大，兼顾粗调与细调。蓝色高亮圆点指示当前选中的顶点。
 
 ### 增强功能
 
@@ -136,18 +151,6 @@ Python 3.9 起，python.org 官方 64 位安装包的 `python3*.dll` 导入了 `
 ## 类别文件
 
 程序启动时可通过第二个参数指定类别文件（每行一个标签名），或通过菜单 `File > Open Default Class File` 加载。不指定时使用内置默认列表。
-
----
-
-## 修改 UI 文案
-
-文案在 `resources/strings/*.properties` 中。修改后需编译资源：
-
-```bash
-pyrcc5 -o libs/resources.py resources.qrc
-```
-
-> `libs/resources.py` 已纳入版本管理，改文案后必须重新编译并提交此文件。
 
 ---
 

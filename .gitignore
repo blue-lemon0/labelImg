@@ -40,3 +40,13 @@ __pycache__/
 .unison*
 .attach*
 tmp.*
+
+# Virtual environment
+.venv/
+
+# Tooling
+.omo/
+.attach*
+
+# Build artifacts
+*.egg-info/

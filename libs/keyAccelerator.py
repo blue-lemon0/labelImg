@@ -9,13 +9,13 @@ class KeyAccelerator:
     step = max(1, round(base_step * factor))
     
     用法:
-        accel = KeyAccelerator(max_accel=4.0, time_constant=0.3)
+        accel = KeyAccelerator(max_accel=6.0, time_constant=0.4)
         accel.start()           # 首次按键时
         step = accel.step()     # 每次定时器 tick → 像素步长
         accel.stop()            # 所有键松开时
     """
 
-    def __init__(self, max_accel=4.0, time_constant=0.3, base_step=1.0):
+    def __init__(self, max_accel=20.0, time_constant=0.6, base_step=1.0):
         self.max_accel = max_accel          # 最高速度倍率
         self.time_constant = time_constant  # 时间常数 τ，越大加速越慢
         self.base_step = base_step          # 基础步长（最慢时每 tick 像素）

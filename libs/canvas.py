@@ -686,15 +686,27 @@ class Canvas(QWidget):
         被 Canvas.keyPressEvent 和 MainWindow.eventFilter 调用。
         """
         if action == 'corner_cw':
-            if self.selected_shape:
-                self._cycle_corner(1)
+            if not self.shapes:
+                return
+            if not self.selected_shape:
+                self.select_shape(self.shapes[-1])
+            self._cycle_corner(1)
         elif action == 'corner_ccw':
-            if self.selected_shape:
-                self._cycle_corner(-1)
+            if not self.shapes:
+                return
+            if not self.selected_shape:
+                self.select_shape(self.shapes[-1])
+            self._cycle_corner(-1)
         elif action == 'shape_next':
-            self._select_next_shape(1)
+            if self.corner_idx >= 0:
+                self._reset_corner_mode()
+            else:
+                self._select_next_shape(1)
         elif action == 'shape_prev':
-            self._select_next_shape(-1)
+            if self.corner_idx >= 0:
+                self._reset_corner_mode()
+            else:
+                self._select_next_shape(-1)
 
     def _select_next_shape(self, direction):
         """切换选中标注：direction=1 下一个，-1 上一个。"""
@@ -706,6 +718,8 @@ class Canvas(QWidget):
             self.select_shape(self.shapes[0 if direction == 1 else -1])
             return
         if len(self.shapes) == 1:
+            # 只有一个框时，再按 X 取消选中
+            self.de_select_shape()
             return
         idx = self.shapes.index(self.selected_shape)
         next_idx = (idx + direction) % len(self.shapes)
@@ -755,9 +769,9 @@ class Canvas(QWidget):
 
     def _cycle_corner(self, direction):
         """通过数据驱动的转换表轮换角点选择。
-        direction=1:  顺时针  -1→0→1→2→3→-1→0…
-        direction=-1: 逆时针  -1→0→3→2→1→-1→0…
-        两者共享同一逻辑——只有转换表不同。
+        direction=1:  顺时针  0→1→2→3→0→1…
+        direction=-1: 逆时针  0→3→2→1→0→3…
+        不包含"整个矩形"状态（-1），切回整体需用 X 键。
         """
         shape = self.selected_shape
         if shape is None:
@@ -766,10 +780,10 @@ class Canvas(QWidget):
             self.corner_idx = 0  # 首次按下始终进入左上角(0)
         else:
             transitions = {
-                1: {0: 1, 1: 2, 2: 3, 3: -1},    # 顺时针
-                -1: {0: 3, 3: 2, 2: 1, 1: -1},   # 逆时针
+                1:  {0: 1, 1: 2, 2: 3, 3: 0},   # 顺时针，4 状态闭环
+                -1: {0: 3, 3: 2, 2: 1, 1: 0},   # 逆时针，4 状态闭环
             }
-            self.corner_idx = transitions[direction].get(self.corner_idx, -1)
+            self.corner_idx = transitions[direction].get(self.corner_idx, 0)
         self._apply_corner_visual()
         self.repaint()
 

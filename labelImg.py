@@ -666,6 +666,15 @@ class MainWindow(QMainWindow, WindowMixin):
             if event.key() == Qt.Key_Escape and self._nav_active:
                 self._clear_nav_mode()
                 return True
+            # ? 键（Shift+/ 或 Key_Question）或 H 键 → 打开快捷键面板
+            ctrl = event.modifiers() & Qt.ControlModifier
+            if event.key() == Qt.Key_H and not ctrl:
+                self.show_shortcuts_dialog()
+                return True
+            if event.key() == Qt.Key_Question or \
+               (event.key() == Qt.Key_Slash and (event.modifiers() & Qt.ShiftModifier)):
+                self.show_shortcuts_dialog()
+                return True
             shift = event.modifiers() & Qt.ShiftModifier
             action = KEY_BINDINGS.get((event.key(), shift))
             if action is not None:
@@ -824,77 +833,137 @@ class MainWindow(QMainWindow, WindowMixin):
         QMessageBox.information(self, u'Information', msg)
 
     def show_shortcuts_dialog(self):
-        """显示快捷键速查表。"""
-        shortcuts = []
-
-        # 从 QAction 收集有快捷键的项
-        for action in self.findChildren(QAction):
-            key_seq = action.shortcut()
-            if key_seq.isEmpty():
-                continue
-            text = action.text().replace('&', '')
-            if text:
-                shortcuts.append((text.strip(), key_seq.toString(QKeySequence.NativeText)))
-
-        # Canvas 按键绑定（Z/C/X）
-        desc_map = {
-            'corner_cw': '角点选择（顺时针）',
-            'corner_ccw': '角点选择（逆时针）',
-            'shape_next': '选择下一个标注',
-            'shape_prev': '选择上一个标注',
-        }
-        for (key, shift), action_name in KEY_BINDINGS.items():
-            mod = 'Shift+' if shift else ''
-            key_name = QKeySequence(key).toString()
-            shortcuts.append((desc_map.get(action_name, action_name), mod + key_name))
-
-        # 固定快捷键（非 QAction 方式注册的）
-        extras = [
-            ('下一张图片', 'D'),
-            ('上一张图片', 'A'),
-            ('校验图片', 'Space'),
-            ('完成绘制（闭合）', 'Enter'),
-            ('取消绘制 / 重置角点', 'Esc'),
-            ('方向键移动标注/顶点', '↑ ↓ ← →'),
-            ('加速移动（按住）', 'Shift + 方向键'),
+        """显示快捷键速查表，按功能分组。"""
+        # items: ('功能', '快捷键', is_frequent)  is_frequent=True 时为蓝色高亮
+        groups = [
+            ('常用功能', [
+                ('创建标注框', 'W', True),
+                ('上一张图片', 'A', True),
+                ('下一张图片', 'D', True),
+                ('进入顶点模式 / 顺时针切换顶点', 'C', True),
+                ('进入顶点模式 / 逆时针切换顶点', 'Z', True),
+                ('选择下一个标注', 'X', True),
+                ('选择上一个标注', 'Shift+X', False),
+                ('移动标注 / 顶点', '↑ ↓ ← →', True),
+                ('缩放', 'Ctrl+滚轮', True),
+            ]),
+            ('图片导航', [
+                ('打开图片', 'Ctrl+O', False),
+                ('打开目录', 'Ctrl+U', False),
+                ('打开标注文件', 'Ctrl+Shift+O', False),
+                ('保存', 'Ctrl+S', True),
+                ('另存为', 'Ctrl+Shift+S', False),
+                ('修改保存目录', 'Ctrl+R', False),
+                ('删除图片', 'Ctrl+Shift+D', False),
+                ('关闭', 'Ctrl+W', False),
+                ('退出', 'Ctrl+Q', False),
+            ]),
+            ('标注绘制', [
+                ('闭合标注', 'Enter', False),
+                ('取消绘制 / 退出顶点模式', 'Esc', False),
+                ('标记已确认', 'Space', False),
+            ]),
+            ('选择与编辑', [
+                ('复制标注框', 'Ctrl+D', False),
+                ('复制上一张标注', 'Ctrl+V', True),
+                ('删除选中框', 'Delete', True),
+                ('撤销', 'Ctrl+Z', True),
+                ('标注框线颜色', 'Ctrl+L', False),
+                ('隐藏全部标注', 'Ctrl+H', False),
+                ('显示全部标注', 'Ctrl+A', False),
+            ]),
+            ('视图控制', [
+                ('放大', 'Ctrl++', True),
+                ('缩小', 'Ctrl+-', True),
+                ('缩放到 100%', 'Ctrl+=', False),
+                ('适应窗口', 'Ctrl+F', False),
+                ('适应宽度', 'Ctrl+Shift+F', False),
+                ('拖动平移画布', '鼠标右键拖拽', False),
+                ('调亮', 'Ctrl+Shift++', False),
+                ('调暗', 'Ctrl+Shift+-', False),
+                ('调亮度', 'Ctrl+Shift+滚轮', False),
+            ]),
+            ('模式切换', [
+                ('单一类别模式', 'Ctrl+Shift+S', False),
+                ('强制画正方形', 'Ctrl+Shift+R', False),
+                ('编辑模式', 'Ctrl+J', False),
+                ('高级模式', 'Ctrl+Shift+A', False),
+                ('显示/隐藏标签文字', 'Ctrl+Shift+P', False),
+            ]),
+            ('其他', [
+                ('快捷键帮助', '? / H', True),
+                ('格式切换', 'Ctrl+Y', False),
+                ('标签统计面板', 'Ctrl+T', False),
+            ]),
         ]
-        shortcuts.extend(extras)
 
-        # 去重（按快捷键），保留首次出现的文本
-        seen = set()
-        unique = []
-        for text, key in shortcuts:
-            if key not in seen:
-                seen.add(key)
-                unique.append((text, key))
-
-        # 构建对话框
         dialog = QDialog(self)
         dialog.setWindowTitle('快捷键')
-        dialog.setMinimumSize(520, 300)
-        dialog.resize(620, 480)
-        layout = QVBoxLayout(dialog)
+        dialog.setMinimumSize(600, 420)
+        dialog.resize(700, 580)
 
-        table = QTableWidget(len(unique), 2)
-        table.setHorizontalHeaderLabels(['功能', '快捷键'])
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionMode(QTableWidget.NoSelection)
+        root_layout = QVBoxLayout(dialog)
 
-        for i, (text, key) in enumerate(unique):
-            table.setItem(i, 0, QTableWidgetItem(text))
-            item = QTableWidgetItem(key)
-            font = item.font()
-            font.setBold(True)
-            item.setFont(font)
-            table.setItem(i, 1, item)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setSpacing(12)
 
-        layout.addWidget(table)
+        for group_title, items in groups:
+            gbox = QGroupBox(group_title)
+            gbox.setStyleSheet(
+                'QGroupBox { font-weight: bold; font-size: 12px; '
+                'border: 1px solid #ccc; border-radius: 4px; '
+                'margin-top: 8px; padding: 12px 6px 6px 6px; }'
+                'QGroupBox::title { subcontrol-origin: margin; '
+                'left: 10px; padding: 0 4px; }'
+            )
+            g_layout = QVBoxLayout(gbox)
+            g_layout.setContentsMargins(4, 4, 4, 4)
+            g_layout.setSpacing(0)
+
+            table = QTableWidget(len(items), 2)
+            table.setHorizontalHeaderLabels(['功能', '快捷键'])
+            table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            table.verticalHeader().setVisible(False)
+            table.setEditTriggers(QTableWidget.NoEditTriggers)
+            table.setSelectionMode(QTableWidget.NoSelection)
+            table.setShowGrid(False)
+            table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+            BLUE = QColor('#1976D2')
+            for i, (text, key, is_freq) in enumerate(items):
+                func_item = QTableWidgetItem(text)
+                if is_freq:
+                    func_item.setForeground(BLUE)
+                table.setItem(i, 0, func_item)
+                key_item = QTableWidgetItem(key)
+                font = key_item.font()
+                font.setBold(True)
+                if is_freq:
+                    key_item.setForeground(BLUE)
+                key_item.setFont(font)
+                table.setItem(i, 1, key_item)
+
+            # 固定表格高度以容纳全部行（避免内部滚动条）
+            header_h = table.horizontalHeader().height()
+            row_total = sum(table.rowHeight(r) for r in range(len(items)))
+            table.setFixedHeight(header_h + row_total + 4)
+
+            g_layout.addWidget(table)
+            layout.addWidget(gbox)
+
+        layout.addStretch()
+        scroll.setWidget(content)
+        root_layout.addWidget(scroll)
+
         close_btn = QPushButton('关闭')
         close_btn.clicked.connect(dialog.accept)
-        layout.addWidget(close_btn, alignment=Qt.AlignCenter)
+        root_layout.addWidget(close_btn, alignment=Qt.AlignCenter)
 
         dialog.exec_()
 

@@ -13,8 +13,8 @@ from libs.keyAccelerator import KeyAccelerator
 # 将物理按键与逻辑操作解耦。
 # 后续可改为从用户配置加载。
 KEY_BINDINGS = {
-    (Qt.Key_C, Qt.NoModifier):    'corner_cw',      # C 键 → 顺时针切换角点
-    (Qt.Key_Z, Qt.NoModifier):    'corner_ccw',     # Z 键 → 逆时针切换角点
+(Qt.Key_C, Qt.NoModifier):    'corner_cw',      # C 键 → 顺时针切换顶点
+(Qt.Key_Z, Qt.NoModifier):    'corner_ccw',     # Z 键 → 逆时针切换顶点
     (Qt.Key_X, Qt.NoModifier):    'shape_next',     # X 键 → 选中下一个标注
     (Qt.Key_X, Qt.ShiftModifier): 'shape_prev',     # Shift+X → 选中上一个标注
 }
@@ -80,7 +80,7 @@ class Canvas(QWidget):
         # 平移用
         self.pan_initial_pos = QPoint()
 
-        # 键盘角点选择模式（-1=整体移动/平移，0-3=对应角点）
+        # 键盘顶点选择模式（-1=整体移动/平移，0-3=对应顶点）
         self.corner_idx = -1
 
         # 方向键组合移动（按下 Left+Down 可斜向移动）
@@ -768,7 +768,7 @@ class Canvas(QWidget):
                     self._key_accel.stop()
 
     def _cycle_corner(self, direction):
-        """通过数据驱动的转换表轮换角点选择。
+        """通过数据驱动的转换表轮换顶点选择。
         direction=1:  顺时针  0→1→2→3→0→1…
         direction=-1: 逆时针  0→3→2→1→0→3…
         不包含"整个矩形"状态（-1），切回整体需用 X 键。
@@ -819,7 +819,7 @@ class Canvas(QWidget):
         self._apply_move_step(step)
 
     def _apply_move_step(self, step):
-        """应用 (dx, dy) 步长：如果是角点模式则移动单个顶点，否则移动整个标注。"""
+        """应用 (dx, dy) 步长：如果是顶点模式则移动单个顶点，否则移动整个标注。"""
         if self.corner_idx >= 0:
             if self._is_valid_vertex_move(self.corner_idx, step):
                 self._move_vertex(self.corner_idx, step)
@@ -866,7 +866,7 @@ class Canvas(QWidget):
             return QPointF(0, step.y()), QPointF(step.x(), 0)   # 右邻垂直移，左邻水平移
 
     def _move_vertex(self, index, step):
-        """移动单个角点，同时调整相邻两点以保持矩形。
+        """移动单个顶点，同时调整相邻两点以保持矩形。
         逻辑与 bounded_move_vertex() 一致。"""
         shape = self.selected_shape
         left_idx = (index + 1) % 4

@@ -25,6 +25,7 @@ from libs.stringBundle import StringBundle
 from libs.canvas import Canvas, KEY_BINDINGS
 from libs.zoomWidget import ZoomWidget
 from libs.lightWidget import LightWidget
+from libs.slide_animator import AutoCollapseDockManager
 from libs.compoundWidgets import ZoomWidgetPanel, LightWidgetPanel
 from libs.labelDialog import LabelDialog
 from libs.colorDialog import ColorDialog
@@ -61,7 +62,6 @@ class WindowMixin(object):
         toolbar.setIconSize(QSize(24, 24))
         if actions:
             add_actions(toolbar, actions)
-        self.addToolBar(Qt.LeftToolBarArea, toolbar)
         return toolbar
 
 
@@ -177,7 +177,21 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             print("Not find:/data/predefined_classes.txt (optional)")
 
+        # ---- 左侧 QSplitter（在 _setup_ui_widgets 之前创建，scroll 直接进 splitter） ----
+        self._left_placeholder = QWidget()
+        self._left_placeholder.setMinimumWidth(80)
+        self._left_splitter = QSplitter(Qt.Horizontal)
+        self._left_splitter.setHandleWidth(8)
+        self._left_splitter.setOpaqueResize(True)
+        self._left_splitter.addWidget(self._left_placeholder)   # 左：占位
+
         self._setup_ui_widgets()
+
+        # 侧边栏自动折叠 + 边缘唤醒（独立，零耦合）
+        self._side_mgr = AutoCollapseDockManager(self)
+        self._side_mgr.register(self.dock)
+        self._side_mgr.register(self.file_dock)
+
         self._create_actions_and_menus()
 
         self.status_manager = StatusManager(self.statusBar())
@@ -262,6 +276,22 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # 全局事件过滤器：在子控件之前拦截自定义快捷键
         self.installEventFilter(self)
+
+        # ---- 替换左侧 placeholder 为实际工具栏 ----
+        if self._left_placeholder is not None:
+            idx = self._left_splitter.indexOf(self._left_placeholder)
+            self._left_splitter.insertWidget(idx, self.tools)
+            self._left_placeholder.setParent(None)   # 立即从 splitter 移除
+            self._left_placeholder.deleteLater()      # 异步删除
+            self._left_placeholder = None
+            self._left_splitter.setSizes([140, max(self.width() - 140, 400)])
+        # 拖拽信号 + 折叠计时器
+        self._left_splitter.splitterMoved.connect(self._on_left_splitter_moved)
+        self._left_tools_saved_width = 140
+        self._collapse_check_timer = QTimer(self)
+        self._collapse_check_timer.setSingleShot(True)
+        self._collapse_check_timer.setInterval(200)
+        self._collapse_check_timer.timeout.connect(self._check_left_collapse)
 
     # ---------------------------------------------------------------------------
     # UI 构建：控件、停靠面板、画布
@@ -375,13 +405,19 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.drawingPolygon.connect(self.toggle_drawing_sensitive)
         self.canvas.installEventFilter(self)
 
-        self.setCentralWidget(scroll)
+        # scroll 直接进已有的 splitter（右），不单独设 centralWidget
+        self._left_splitter.addWidget(scroll)
+        self._left_splitter.setStretchFactor(0, 0)
+        self._left_splitter.setStretchFactor(1, 1)
+        self.setCentralWidget(self._left_splitter)
+
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock)
         self.addDockWidget(Qt.RightDockWidgetArea, self.file_dock)
         self.file_dock.setFeatures(QDockWidget.DockWidgetFloatable)
 
         self.dock_features = QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
         self.dock.setFeatures(self.dock.features() ^ self.dock_features)
+        # 信号延迟到工具栏替换后再连接
 
     # ---------------------------------------------------------------------------
     # 创建所有 Action + 菜单栏/工具栏
@@ -548,6 +584,10 @@ class MainWindow(QMainWindow, WindowMixin):
         labels.setText(get_str('showHide'))
         labels.setShortcut('Ctrl+Shift+L')
 
+        # 一键切换所有侧边栏（带动画）
+        toggle_side_panels = action('切换侧边栏', self._toggle_all_panels,
+                                    None, None, '显示/隐藏侧边标注与文件面板')
+
         # 标签列表右键菜单
         label_menu = QMenu()
         add_actions(label_menu, (edit, delete))
@@ -622,7 +662,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.auto_saving,
             self.single_class_mode,
             self.display_label_option,
-            labels, advanced_mode, None,
+            labels, toggle_side_panels, advanced_mode, None,
             hide_all, show_all, None,
             zoom_in, zoom_out, zoom_org, None,
             fit_window, fit_width, None,
@@ -636,7 +676,6 @@ class MainWindow(QMainWindow, WindowMixin):
             action('&Copy here', self.copy_shape),
             action('&Move here', self.move_shape)))
 
-        self.tools = self.toolbar('Tools')
         self.actions.beginner = (
             open, open_dir, change_save_dir, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
             zoom_compound, fit_window, fit_width, None,
@@ -646,6 +685,10 @@ class MainWindow(QMainWindow, WindowMixin):
             open, open_dir, change_save_dir, open_next_image, open_prev_image, save, save_format, None,
             create_mode, edit_mode, None,
             hide_all, show_all)
+
+        self.tools = self.toolbar('Tools')
+        self.tools.setOrientation(Qt.Vertical)
+        # dock 包装在 init 末尾（restoreState 之后）进行，避免被覆盖
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Control:
@@ -758,6 +801,45 @@ class MainWindow(QMainWindow, WindowMixin):
         self.dirty = False
         self.actions.save.setEnabled(False)
         self.actions.create.setEnabled(True)
+
+    # ── 左侧工具面板折叠（QSplitter 方案） ────────────
+
+    def _on_left_splitter_moved(self, pos, index):
+        """拖拽中实时适应画布；松手后（debounce timer）检查折叠。"""
+        # 拖拽中：非手动缩放模式则实时重算
+        if self.zoom_mode != self.MANUAL_ZOOM:
+            self.adjust_scale()
+        # 松手后检查（连续拖拽会不断重启，松手 200ms 后才触发）
+        self._collapse_check_timer.start()
+
+    def _check_left_collapse(self):
+        """松手后检查是否需要自动折叠。"""
+        sizes = self._left_splitter.sizes()
+        if 0 < sizes[0] < 40:
+            self._collapse_left_tools()
+
+    def _collapse_left_tools(self):
+        """收起左面板到 0。"""
+        sizes = self._left_splitter.sizes()
+        if sizes[0] > 0:
+            self._left_tools_saved_width = sizes[0]
+        total = sum(sizes)
+        self._left_splitter.setSizes([0, total])
+
+    def _expand_left_tools(self):
+        """展开左面板到保存宽度。"""
+        target = getattr(self, '_left_tools_saved_width', 140)
+        sizes = self._left_splitter.sizes()
+        total = sum(sizes)
+        self._left_splitter.setSizes([target, total - target])
+
+    def _toggle_all_panels(self):
+        """切换所有侧边面板（左工具 + 右标注/文件）。"""
+        self._side_mgr.toggle_all()
+        if self._left_splitter.sizes()[0] > 0:
+            self._collapse_left_tools()
+        else:
+            self._expand_left_tools()
 
     def toggle_actions(self, value=True):
         """启用/禁用依赖已打开图片的控件。"""
@@ -1599,8 +1681,9 @@ class MainWindow(QMainWindow, WindowMixin):
     def scale_fit_window(self):
         """计算缩放比例，使图片适应主窗口。"""
         e = 2.0  # 留 2px 边距，防止产生滚动条
-        w1 = self.centralWidget().width() - e
-        h1 = self.centralWidget().height() - e
+        vp = self.scroll_area.viewport()
+        w1 = vp.width() - e
+        h1 = vp.height() - e
         a1 = w1 / h1
         # 根据图片宽高比计算缩放值
         w2 = self.canvas.pixmap.width() - 0.0
@@ -1610,7 +1693,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def scale_fit_width(self):
         # 边距在这里效果不太好，不加了
-        w = self.centralWidget().width() - 2.0
+        w = self.scroll_area.viewport().width() - 2.0
         return w / self.canvas.pixmap.width()
 
     def closeEvent(self, event):

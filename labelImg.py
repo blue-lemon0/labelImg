@@ -270,6 +270,12 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_coordinates = QLabel('')
         self.statusBar().addPermanentWidget(self.label_coordinates)
 
+        # 启动时同步工具栏按钮样式
+        self._update_format_ui(
+            {LabelFileFormat.PASCAL_VOC: FORMAT_PASCALVOC,
+             LabelFileFormat.YOLO: FORMAT_YOLO,
+             LabelFileFormat.CREATE_ML: FORMAT_CREATEML}[self.label_file_format])
+
         # 如果启动时传入的是目录，直接打开
         if self.file_path and os.path.isdir(self.file_path):
             self.open_dir_dialog(dir_path=self.file_path, silent=True)
@@ -726,6 +732,19 @@ class MainWindow(QMainWindow, WindowMixin):
         return super().eventFilter(obj, event)
 
     # 辅助功能 #
+    def _update_format_ui(self, save_format):
+        """根据格式更新工具栏按钮样式。YOLO 模式下红色高亮，其他格式恢复默认。"""
+        btn = self.tools.getButtonForAction(self.actions.save_format)
+        if btn:
+            if save_format == FORMAT_YOLO:
+                btn.setStyleSheet(
+                    "QToolButton { text-align: left; padding-left: 4px;"
+                    " border: 2px solid #F44336; background-color: #FFF0F0;"
+                    " font-weight: bold; }")
+            else:
+                btn.setStyleSheet(
+                    "QToolButton { text-align: left; padding-left: 4px; }")
+
     def set_format(self, save_format):
         if save_format == FORMAT_PASCALVOC:
             self.actions.save_format.setText(FORMAT_PASCALVOC)
@@ -745,8 +764,23 @@ class MainWindow(QMainWindow, WindowMixin):
             self.label_file_format = LabelFileFormat.CREATE_ML
             LabelFile.suffix = JSON_EXT
 
+        self._update_format_ui(save_format)
+
     def change_format(self):
         if self.label_file_format == LabelFileFormat.PASCAL_VOC:
+            # 切换到 YOLO 前弹确认框，防止误触 Ctrl+Y
+            reply = QMessageBox.warning(
+                self, '确认切换',
+                '即将切换到 YOLO 格式！\n\n'
+                '⚠ 与 PascalVOC 的重要区别：\n'
+                '• 标注保存为 .txt 文件（非 XML）\n'
+                '• difficult 标记会被丢弃\n'
+                '• 仅存储类别索引，不含类别名称\n\n'
+                '确定要继续吗？',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
             self.set_format(FORMAT_YOLO)
         elif self.label_file_format == LabelFileFormat.YOLO:
             self.set_format(FORMAT_CREATEML)

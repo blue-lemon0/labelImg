@@ -13,6 +13,7 @@ class ToolBar(QToolBar):
         layout.setContentsMargins(*m)
         self.setContentsMargins(*m)
         self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
+        self._action_buttons = {}
 
     def addAction(self, action):
         if isinstance(action, QWidgetAction):
@@ -22,6 +23,11 @@ class ToolBar(QToolBar):
         btn.setToolButtonStyle(self.toolButtonStyle())
         btn.setStyleSheet("QToolButton { text-align: left; padding-left: 4px; }")
         self.addWidget(btn)
+        self._action_buttons[id(action)] = btn
+
+    def getButtonForAction(self, action):
+        """返回与 QAction 关联的 ToolButton，用于动态修改按钮样式。"""
+        return self._action_buttons.get(id(action))
 
 
 class ToolButton(QToolButton):

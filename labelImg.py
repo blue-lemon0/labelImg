@@ -42,6 +42,7 @@ from libs.hashableQListWidgetItem import HashableQListWidgetItem
 from libs.labelStats import (LabelStatsDialog, scan_single_annotation,
                              resolve_annotation_path,
                              batch_rename_label)
+from libs.convertDialog import ConvertDialog, CleanDialog
 
 __appname__ = 'labelImg'
 
@@ -663,6 +664,16 @@ class MainWindow(QMainWindow, WindowMixin):
         label_stats_action = action('标签统计', self.show_label_stats,
                                     'Ctrl+T', None, '统计当前数据集中的标签分布')
         self.menuBar().addAction(label_stats_action)
+
+        # 格式转换 — 独立菜单栏项
+        convert_action = action('格式转换', self.show_convert_dialog,
+                                None, None, '批量转换标注文件格式')
+        self.menuBar().addAction(convert_action)
+
+        # 删除标注文件 — 独立菜单栏项
+        clean_action = action('删除标注文件', self.show_clean_dialog,
+                              None, None, '批量删除标注文件（清理已转换的原文件）')
+        self.menuBar().addAction(clean_action)
 
         add_actions(self.menus.view, (
             self.auto_saving,
@@ -2323,6 +2334,21 @@ class MainWindow(QMainWindow, WindowMixin):
         if master_on and checked:
             self._jump_to_first_nav_image()
         self._update_title_counter()
+
+    def show_convert_dialog(self):
+        """打开格式转换对话框（批量格式互转）。"""
+        # 默认标注目录 = 存放目录，图片目录 = 当前图片所在目录
+        anno_dir = self.default_save_dir or self.dir_name or ''
+        img_dir = self.dir_name or ''
+        out_dir = self.default_save_dir or self.dir_name or ''
+        dialog = ConvertDialog(self, anno_dir=anno_dir, img_dir=img_dir, out_dir=out_dir)
+        dialog.exec_()
+
+    def show_clean_dialog(self):
+        """打开批量删除标注文件对话框（独立于转换，确认转换结果后清理原文用）。"""
+        anno_dir = self.default_save_dir or self.dir_name or ''
+        dialog = CleanDialog(self, anno_dir=anno_dir)
+        dialog.exec_()
 
     def _sync_current_after_batch(self, affected_images, action, *labels):
         """批量操作后，直接更新当前画布的 shapes 和标签列表，不 reload 文件。

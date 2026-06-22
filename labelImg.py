@@ -1034,7 +1034,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 ('缩放到 100%', 'Ctrl+=', False),
                 ('适应窗口', 'Ctrl+F', False),
                 ('适应宽度', 'Ctrl+Shift+F', False),
-                ('拖动平移画布', '鼠标右键拖拽', False),
+                ('拖动平移画布', '鼠标左键拖拽', False),
                 ('调亮', 'Ctrl+Shift++', False),
                 ('调暗', 'Ctrl+Shift+-', False),
                 ('调亮度', 'Ctrl+Shift+滚轮', False),

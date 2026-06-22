@@ -208,6 +208,10 @@ class MainWindow(QMainWindow, WindowMixin):
         self.fill_color = None
         self.zoom_level = 100
         self.fit_window = False
+        self._saved_zoom = None
+        self._saved_scroll_h = 0
+        self._saved_scroll_v = 0
+        self._preserve_zoom = False
         # Chris 添加：difficult 标记
         self.difficult = False
 
@@ -609,6 +613,32 @@ class MainWindow(QMainWindow, WindowMixin):
         self.draw_squares_option.setChecked(settings.get(SETTING_DRAW_SQUARE, False))
         self.draw_squares_option.triggered.connect(self.toggle_draw_square)
 
+        # 绘制复选框图标（工具栏上用，菜单已有原生勾选）
+        def _checkbox_icon(checked):
+            pixmap = QPixmap(20, 20)
+            pixmap.fill(Qt.transparent)
+            p = QPainter(pixmap)
+            p.setRenderHint(QPainter.Antialiasing)
+            rect = QRectF(2, 2, 16, 16)
+            p.setPen(QPen(QColor('#555'), 1.5))
+            p.setBrush(QColor('#fff'))
+            p.drawRoundedRect(rect, 2, 2)
+            if checked:
+                p.setPen(QPen(QColor('#2b7'), 2.5))
+                p.drawLine(QPointF(5, 10), QPointF(9, 14))
+                p.drawLine(QPointF(9, 14), QPointF(15, 6))
+            p.end()
+            return QIcon(pixmap)
+
+        # 记住缩放位置
+        checked = settings.get(SETTING_REMEMBER_ZOOM, False)
+        self.remember_zoom_action = QAction(_checkbox_icon(checked), '记住缩放位置', self)
+        self.remember_zoom_action.setCheckable(True)
+        self.remember_zoom_action.setChecked(checked)
+        self.remember_zoom_action.setToolTip('开启后，A/D 翻页时自动保持上一张的缩放和滚动位置')
+        self.remember_zoom_action.toggled.connect(
+            lambda c: self.remember_zoom_action.setIcon(_checkbox_icon(c)))
+
         # 存储所有 Action 便于后续统一管理
         self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
                               lineColor=color1, create=create, delete=delete, edit=edit, copy=copy, undo=undo,
@@ -682,6 +712,7 @@ class MainWindow(QMainWindow, WindowMixin):
             labels, toggle_side_panels, advanced_mode, None,
             hide_all, show_all, None,
             zoom_in, zoom_out, zoom_org, None,
+            self.remember_zoom_action,
             fit_window, fit_width, None,
             light_brighten, light_darken, light_org))
 
@@ -695,13 +726,16 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.actions.beginner = (
             open, open_dir, change_save_dir, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
-            zoom_compound, fit_window, fit_width, None,
+            zoom_compound, None,
+            self.remember_zoom_action,
+            fit_window, fit_width, None,
             light_compound, light_org)
 
         self.actions.advanced = (
             open, open_dir, change_save_dir, open_next_image, open_prev_image, save, save_format, None,
             create_mode, edit_mode, None,
-            hide_all, show_all)
+            hide_all, show_all, None,
+            self.remember_zoom_action)
 
         self.tools = self.toolbar('Tools')
         self.tools.setOrientation(Qt.Vertical)
@@ -1182,6 +1216,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.cur_img_idx = self.m_img_list.index(abs_path)
         filename = self.m_img_list[self.cur_img_idx]
         if filename:
+            if self.file_path is not None and self.remember_zoom_action.isChecked():
+                self._save_zoom_scroll()
+                self._preserve_zoom = True
             self.load_file(filename)
 
     # 右键菜单：在文件管理器中定位标注文件
@@ -1293,7 +1330,7 @@ class MainWindow(QMainWindow, WindowMixin):
             else:
                 item.setForeground(QColor(Qt.black))
 
-    def load_labels(self, shapes, replace=True):
+    def load_labels(self, shapes, replace=True, repaint_canvas=True):
         s = []
         for label, points, line_color, fill_color, difficult in shapes:
             shape = Shape(label=label)
@@ -1322,7 +1359,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.add_label(shape)
         self.update_combo_box()
         if replace:
-            self.canvas.load_shapes(s)
+            self.canvas.load_shapes(s, repaint=repaint_canvas)
         else:
             self.canvas.shapes.extend(s)
         self._validate_label_list()
@@ -1569,12 +1606,25 @@ class MainWindow(QMainWindow, WindowMixin):
     def add_light(self, increment=10):
         self.set_light(self.light_widget.value() + increment)
 
+    def _save_zoom_scroll(self):
+        """记住当前缩放比例和滚动条位置，供下一张图恢复。"""
+        self._saved_zoom = self.zoom_widget.value()
+        self._saved_scroll_h = self.scroll_bars[Qt.Horizontal].value()
+        self._saved_scroll_v = self.scroll_bars[Qt.Vertical].value()
+
     def toggle_polygons(self, value):
         for item, shape in self.items_to_shapes.items():
             item.setCheckState(Qt.Checked if value else Qt.Unchecked)
 
     def load_file(self, file_path=None):
         """加载指定文件，若为 None 则加载上次打开的文件。"""
+        # 捕获保存的缩放/滚动状态后立即清空，避免非翻页路径误用
+        _preserve = self._preserve_zoom and self._saved_zoom is not None
+        _saved_zoom = self._saved_zoom
+        _saved_h = self._saved_scroll_h
+        _saved_v = self._saved_scroll_v
+        self._preserve_zoom = False
+        self._saved_zoom = None
         self.reset_state()
         self.canvas.setEnabled(False)
         if file_path is None:
@@ -1634,12 +1684,25 @@ class MainWindow(QMainWindow, WindowMixin):
             self.status("Loaded %s" % os.path.basename(unicode_file_path))
             self.image = image
             self.file_path = unicode_file_path
-            self.canvas.load_pixmap(QPixmap.fromImage(image))
-            if self.label_file:
-                self.load_labels(self.label_file.shapes)
+            if _preserve:
+                self.canvas.pixmap = QPixmap.fromImage(image)
+                self.canvas.scale = 0.01 * _saved_zoom
+                if self.label_file:
+                    self.load_labels(self.label_file.shapes, repaint_canvas=False)
+                else:
+                    self.canvas.shapes = []
+                self.canvas.adjustSize()
+                self.scroll_bars[Qt.Horizontal].setValue(_saved_h)
+                self.scroll_bars[Qt.Vertical].setValue(_saved_v)
+                self.canvas.repaint()
+                self.zoom_widget.setValue(_saved_zoom)
+            else:
+                self.canvas.load_pixmap(QPixmap.fromImage(image))
+                self.adjust_scale(initial=True)
+                if self.label_file:
+                    self.load_labels(self.label_file.shapes)
             self.set_clean()
             self.canvas.setEnabled(True)
-            self.adjust_scale(initial=True)
             self.paint_canvas()
             self.add_recent_file(self.file_path)
             self.toggle_actions(True)
@@ -1773,6 +1836,7 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_SINGLE_CLASS] = self.single_class_mode.isChecked()
         settings[SETTING_PAINT_LABEL] = self.display_label_option.isChecked()
         settings[SETTING_DRAW_SQUARE] = self.draw_squares_option.isChecked()
+        settings[SETTING_REMEMBER_ZOOM] = self.remember_zoom_action.isChecked()
         settings[SETTING_LABEL_FILE_FORMAT] = self.label_file_format
         settings.save()
 
@@ -1962,6 +2026,10 @@ class MainWindow(QMainWindow, WindowMixin):
             self._advance_in_nav(-1)
             return
 
+        if self.file_path is not None and self.remember_zoom_action.isChecked():
+            self._save_zoom_scroll()
+            self._preserve_zoom = True
+
         if self.cur_img_idx - 1 >= 0:
             self.cur_img_idx -= 1
             filename = self.m_img_list[self.cur_img_idx]
@@ -2000,6 +2068,10 @@ class MainWindow(QMainWindow, WindowMixin):
             if self.cur_img_idx + 1 < self.img_count:
                 self.cur_img_idx += 1
                 filename = self.m_img_list[self.cur_img_idx]
+
+        if self.file_path is not None and self.remember_zoom_action.isChecked():
+            self._save_zoom_scroll()
+            self._preserve_zoom = True
 
         if filename:
             self.load_file(filename)
@@ -2451,6 +2523,10 @@ class MainWindow(QMainWindow, WindowMixin):
                 target_idx = all_indices[prev_pos]
             else:
                 target_idx = all_indices[-1]
+
+        if self.file_path is not None and self.remember_zoom_action.isChecked():
+            self._save_zoom_scroll()
+            self._preserve_zoom = True
 
         if target_idx != cur:
             self.cur_img_idx = target_idx

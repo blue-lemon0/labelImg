@@ -938,11 +938,14 @@ class Canvas(QWidget):
         self.shapes = []
         self.repaint()
 
-    def load_shapes(self, shapes):
-        """加载已有标注列表。"""
+    def load_shapes(self, shapes, repaint=True):
+        """加载已有标注列表。
+        :param repaint: 是否立即触发重绘（设为 False 可在批量设置后统一绘制）。
+        """
         self.shapes = list(shapes)
         self.current = None
-        self.repaint()
+        if repaint:
+            self.repaint()
 
     def set_shape_visible(self, shape, value):
         """设置某个标注的可见性。"""

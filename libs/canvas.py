@@ -207,7 +207,9 @@ class Canvas(QWidget):
                     self.override_cursor(CURSOR_POINT)
                     self.current.highlight_vertex(0, Shape.NEAR_VERTEX)
 
-                if self.draw_square:
+                # 按住 Ctrl 或开启了强制正方形 → 约束为正方形
+                ctrl_held = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+                if self.draw_square or ctrl_held:
                     init_pos = self.current[0]
                     min_x = init_pos.x()
                     min_y = init_pos.y()
@@ -458,7 +460,8 @@ class Canvas(QWidget):
             clipped_y = min(max(0, pos.y()), size.height())
             pos = QPointF(clipped_x, clipped_y)
 
-        if self.draw_square:
+        ctrl_held = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+        if self.draw_square or ctrl_held:
             opposite_point_index = (index + 2) % 4
             opposite_point = shape[opposite_point_index]
 

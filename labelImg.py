@@ -611,6 +611,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.draw_squares_option.setShortcut('Ctrl+Shift+R')
         self.draw_squares_option.setCheckable(True)
         self.draw_squares_option.setChecked(settings.get(SETTING_DRAW_SQUARE, False))
+        self.draw_squares_option.setToolTip('切换后画框始终约束为正方形；'
+                                            '不开启时也可按住 Ctrl 拖拽临时约束')
         self.draw_squares_option.triggered.connect(self.toggle_draw_square)
 
         # 绘制复选框图标（工具栏上用，菜单已有原生勾选）
@@ -740,15 +742,6 @@ class MainWindow(QMainWindow, WindowMixin):
         self.tools = self.toolbar('Tools')
         self.tools.setOrientation(Qt.Vertical)
         # dock 包装在 init 末尾（restoreState 之后）进行，避免被覆盖
-
-    def keyReleaseEvent(self, event):
-        if event.key() == Qt.Key_Control:
-            self.canvas.set_drawing_shape_to_square(False)
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Control:
-            # 按住 Ctrl 时绘制正方形
-            self.canvas.set_drawing_shape_to_square(True)
 
     def eventFilter(self, obj, event):
         """在子控件（如 QListWidget、Canvas）消费前拦截快捷键。
@@ -1016,6 +1009,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 ('另存为', 'Ctrl+Shift+S', False),
                 ('修改保存目录', 'Ctrl+R', False),
                 ('删除图片', 'Ctrl+Shift+D', False),
+                ('记住缩放位置', '菜单/工具栏切换', False),
                 ('关闭', 'Ctrl+W', False),
                 ('退出', 'Ctrl+Q', False),
             ]),
@@ -1023,6 +1017,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 ('闭合标注', 'Enter', False),
                 ('取消绘制 / 退出顶点模式', 'Esc', False),
                 ('标记已确认', 'Space', False),
+                ('拖拽时临时约束正方形', '按住Ctrl拖拽', True),
             ]),
             ('选择与编辑', [
                 ('复制标注框', 'Ctrl+D', False),
@@ -1046,7 +1041,7 @@ class MainWindow(QMainWindow, WindowMixin):
             ]),
             ('模式切换', [
                 ('单一类别模式', 'Ctrl+Shift+S', False),
-                ('强制画正方形', 'Ctrl+Shift+R', False),
+                ('强制画正方形（开关）', 'Ctrl+Shift+R', False),
                 ('编辑模式', 'Ctrl+J', False),
                 ('高级模式', 'Ctrl+Shift+A', False),
                 ('显示/隐藏标签文字', 'Ctrl+Shift+P', False),

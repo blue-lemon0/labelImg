@@ -1777,6 +1777,15 @@ class MainWindow(QMainWindow, WindowMixin):
         self.canvas.adjustSize()
         self.canvas.update()
 
+    def _fit_viewport_size(self):
+        """获取稳定的视口尺寸，消除滚动条显隐导致的反馈震荡。
+
+        用 maximumViewportSize() 得到"假设无滚动条"的视口尺寸，
+        该值不随当前滚动条显隐而变，避免 resizeEvent 回路反复重算。
+        """
+        vp = self.scroll_area.maximumViewportSize()
+        return vp.width(), vp.height()
+
     def adjust_scale(self, initial=False):
         value = self.scalers[self.FIT_WINDOW if initial else self.zoom_mode]()
         self.zoom_widget.setValue(int(100 * value))
@@ -1789,9 +1798,9 @@ class MainWindow(QMainWindow, WindowMixin):
     def scale_fit_window(self):
         """计算缩放比例，使图片适应主窗口。"""
         e = 2.0  # 留 2px 边距，防止产生滚动条
-        vp = self.scroll_area.viewport()
-        w1 = vp.width() - e
-        h1 = vp.height() - e
+        w1, h1 = self._fit_viewport_size()
+        w1 -= e
+        h1 -= e
         a1 = w1 / h1
         # 根据图片宽高比计算缩放值
         w2 = self.canvas.pixmap.width() - 0.0
@@ -1801,8 +1810,8 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def scale_fit_width(self):
         # 边距在这里效果不太好，不加了
-        w = self.scroll_area.viewport().width() - 2.0
-        return w / self.canvas.pixmap.width()
+        w, _ = self._fit_viewport_size()
+        return (w - 2.0) / self.canvas.pixmap.width()
 
     def closeEvent(self, event):
         if not self.may_continue():

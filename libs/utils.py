@@ -78,13 +78,29 @@ def format_shortcut(text):
     return '<b>%s</b>+<b>%s</b>' % (mod, key)
 
 
-def generate_color_by_text(text):
+def generate_color_by_text(text, alpha=100):
+    """根据文字生成稳定一致的 RGB 色值。alpha 默认 100（半透明）。"""
     s = ustr(text)
     hash_code = int(hashlib.sha256(s.encode('utf-8')).hexdigest(), 16)
     r = int((hash_code / 255) % 255)
     g = int((hash_code / 65025) % 255)
     b = int((hash_code / 16581375) % 255)
-    return QColor(r, g, b, 100)
+    return QColor(r, g, b, alpha)
+
+
+def colored_icon(text, size=14):
+    """根据文字生成实色正方形图标，用于标签列表中的色标。
+
+    同时设置 Normal/Selected 模式的 pixmap，防止 Qt 在选中时自动叠色。
+    """
+    color = generate_color_by_text(text, alpha=255)
+    pixmap = QPixmap(size, size)
+    pixmap.fill(color)
+    icon = QIcon()
+    for mode in (QIcon.Normal, QIcon.Selected):
+        icon.addPixmap(pixmap, mode, QIcon.On)
+        icon.addPixmap(pixmap, mode, QIcon.Off)
+    return icon
 
 
 def natural_sort(list, key=lambda s:s):

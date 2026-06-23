@@ -353,6 +353,19 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # 创建当前标注列表
         self.label_list = QListWidget()
+        # 选中用实色边框，避免与彩色背景混合
+        self.label_list.setStyleSheet("""
+            QListWidget::item {
+                border: 2px solid transparent;
+                color: palette(text);
+            }
+            QListWidget::item:selected {
+                border: 2px solid #1976D2;
+                background: transparent;
+                color: palette(text);
+            }
+        """)
+        self.label_list.setIconSize(QSize(14, 14))
         label_list_container = QWidget()
         label_list_container.setLayout(list_layout)
         self.label_list.itemActivated.connect(self.label_selection_changed)
@@ -877,7 +890,7 @@ class MainWindow(QMainWindow, WindowMixin):
         text = self.label_dialog.pop_up(item.text())
         if text is not None:
             item.setText(text)
-            item.setBackground(generate_color_by_text(text))
+            item.setIcon(colored_icon(text))
             self.set_dirty()
             self.update_combo_box()
 
@@ -970,7 +983,8 @@ class MainWindow(QMainWindow, WindowMixin):
         item = HashableQListWidgetItem(shape.label)
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
         item.setCheckState(Qt.Checked)
-        item.setBackground(generate_color_by_text(shape.label))
+        # 彩色图标代替背景色，避免与选中高亮混合
+        item.setIcon(colored_icon(shape.label))
         self.store.items_to_shapes[item] = shape
         self.store.shapes_to_items[shape] = item
         self.label_list.addItem(item)
@@ -1142,6 +1156,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if label != shape.label:
             shape.label = item.text()
             shape.line_color = generate_color_by_text(shape.label)
+            item.setIcon(colored_icon(shape.label))
             self.set_dirty()
         else:  # User probably changed item visibility
             self.canvas.set_shape_visible(shape, item.checkState() == Qt.Checked)

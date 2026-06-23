@@ -15,6 +15,7 @@ from libs.utils import new_action, add_actions, format_shortcut, Struct
 from libs.constants import *
 from libs.compoundWidgets import ZoomWidgetPanel, LightWidgetPanel
 from libs.labelFile import LabelFileFormat
+from libs.formatHandler import FORMAT_REGISTRY
 
 
 def build_actions(main_window):
@@ -62,12 +63,8 @@ def build_actions(main_window):
 
     def get_format_meta(format):
         """返回 (标题, 图标名) 元组"""
-        if format == LabelFileFormat.PASCAL_VOC:
-            return '&PascalVOC', 'format_voc'
-        elif format == LabelFileFormat.YOLO:
-            return '&YOLO', 'format_yolo'
-        elif format == LabelFileFormat.CREATE_ML:
-            return '&CreateML', 'format_createml'
+        handler = FORMAT_REGISTRY[format]()
+        return '&' + handler.display_name, handler.icon
 
     save_format = action(get_format_meta(main_window.label_file_format)[0],
                          main_window.change_format, 'Ctrl+Y',

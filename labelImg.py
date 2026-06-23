@@ -1878,6 +1878,11 @@ class MainWindow(QMainWindow, WindowMixin):
             idx = self.cur_img_idx
             if os.path.exists(delete_path):
                 os.remove(delete_path)
+            # YOLO 标注文件在独立保存目录时不会随图片删除，清理掉
+            if self.label_file_format == LabelFileFormat.YOLO:
+                anno_path = self._find_annotation_path(delete_path)
+                if anno_path and os.path.exists(anno_path):
+                    os.remove(anno_path)
             self.import_dir_images(self.last_open_dir)
             if self.img_count > 0:
                 self.cur_img_idx = min(idx, self.img_count - 1)

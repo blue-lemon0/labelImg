@@ -434,11 +434,8 @@ class CleanDialog(QDialog):
             return
 
         exts = self.type_combo.currentData()
-        # 收集匹配的文件（排除 classes.txt）
         all_files = []
         for f in os.listdir(directory):
-            if f.lower() == 'classes.txt':
-                continue
             if any(f.lower().endswith(ext) for ext in exts):
                 all_files.append(f)
 

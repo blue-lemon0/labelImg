@@ -373,6 +373,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.label_list.itemDoubleClicked.connect(self.edit_label)
         # 监听 itemChanged 以检测复选框状态变化
         self.label_list.itemChanged.connect(self.label_item_changed)
+        # 拦截 X/C/Z 等快捷键：label_list 拥有焦点时键盘事件交给 eventFilter
+        self.label_list.installEventFilter(self)
         list_layout.addWidget(self.label_list)
 
         self.dock = QDockWidget(get_str('boxLabelText'), self)
@@ -384,6 +386,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.file_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.file_list_widget.customContextMenuRequested.connect(
             self._pop_file_list_menu)
+        self.file_list_widget.installEventFilter(self)
         file_list_layout = QVBoxLayout()
         file_list_layout.setContentsMargins(0, 0, 0, 0)
         file_list_layout.addWidget(self.file_list_widget)

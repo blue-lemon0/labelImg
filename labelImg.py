@@ -43,6 +43,7 @@ from libs.labelStats import (LabelStatsDialog, scan_single_annotation,
                              resolve_annotation_path,
                              batch_rename_label)
 from libs.convertDialog import ConvertDialog, CleanDialog
+from libs.annotationStore import AnnotationStore
 
 __appname__ = 'labelImg'
 
@@ -238,6 +239,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _init_state(self, default_filename, default_prefdef_class_file, default_save_dir):
         """初始化所有 self.* 状态属性（与 UI 无关）。"""
+        self.store = AnnotationStore()
         self.settings = Settings()
         self.settings.load()
         self.os_name = platform.system()
@@ -248,16 +250,12 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.m_img_list = []
         self.dir_name = None
-        self.label_hist = []
         self.last_open_dir = None
         self.cur_img_idx = 0
         self.img_count = 0
 
         self._nav_labels = set()
         self._nav_active = False
-        self._label_to_indices = {}
-        self._img_label_map = {}
-        self._stats_cache = None
 
         self.dirty = False
         self._undo_stack = []
@@ -292,6 +290,56 @@ class MainWindow(QMainWindow, WindowMixin):
         save_dir = ustr(self.settings.get(SETTING_SAVE_DIR, None))
         if self.default_save_dir is None and save_dir is not None and os.path.exists(save_dir):
             self.default_save_dir = save_dir
+
+    # -- property 桥接（过渡期，逐步迁移到 self.store.xxx） --
+
+    @property
+    def label_hist(self):
+        return self.store.label_hist
+
+    @label_hist.setter
+    def label_hist(self, value):
+        self.store.label_hist = value
+
+    @property
+    def items_to_shapes(self):
+        return self.store.items_to_shapes
+
+    @items_to_shapes.setter
+    def items_to_shapes(self, value):
+        self.store.items_to_shapes = value
+
+    @property
+    def shapes_to_items(self):
+        return self.store.shapes_to_items
+
+    @shapes_to_items.setter
+    def shapes_to_items(self, value):
+        self.store.shapes_to_items = value
+
+    @property
+    def lastLabel(self):
+        return self.store.last_label
+
+    @lastLabel.setter
+    def lastLabel(self, value):
+        self.store.last_label = value
+
+    @property
+    def prev_label_text(self):
+        return self.store.prev_label_text
+
+    @prev_label_text.setter
+    def prev_label_text(self, value):
+        self.store.prev_label_text = value
+
+    @property
+    def default_label(self):
+        return self.store.default_label
+
+    @default_label.setter
+    def default_label(self, value):
+        self.store.default_label = value
 
     # ---------------------------------------------------------------------------
     # UI 构建：控件、停靠面板、画布
@@ -1128,16 +1176,13 @@ class MainWindow(QMainWindow, WindowMixin):
         self.default_label = text
 
     def _refresh_default_label_combo(self):
-        """用 _label_to_indices + label_hist 里的候选标签刷新下拉列表。"""
+        """刷新下拉列表候选。"""
         current = self.default_label_combo.currentText()
-        labels = set()
-        labels.update(self._label_to_indices.keys())
-        labels.update(self.label_hist)
-        labels.discard("")
+        labels = self.store.get_all_labels()
         self.default_label_combo.blockSignals(True)
         self.default_label_combo.clear()
         if labels:
-            self.default_label_combo.addItems(sorted(labels))
+            self.default_label_combo.addItems(labels)
         self.default_label_combo.setEditText(current)
         self.default_label_combo.blockSignals(False)
 
@@ -1156,7 +1201,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _remove_from_preset_labels(self, text):
         """从 label_hist 移除，刷新下拉。若标签仍存在于标注中则自动保留。"""
-        self.label_hist = [l for l in self.label_hist if l.lower() != text.lower()]
+        self.store.remove_from_history(text)
         self._refresh_default_label_combo()
 
     def label_selection_changed(self):
@@ -1187,7 +1232,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.use_default_label_checkbox.isChecked() or not self.default_label_combo.currentText():
             # 下拉候选：标注文件中已有的标签（删框保存后自动消失）
             #          + 最近 10 个尚未保存过的新标签（方便新建时选用）
-            annotation_labels = sorted(self._label_to_indices.keys())
+            annotation_labels = sorted(self.store.label_to_indices.keys())
             recent_unsaved = []
             for label in reversed(self.label_hist):
                 if label not in annotation_labels:
@@ -1231,12 +1276,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _add_to_label_hist(self, text):
         """将标签加入历史记录（大小写去重，保留最近 100 条）。"""
-        # 先移除同名的（大小写不敏感），保证最新拼写排在最后
-        self.label_hist = [l for l in self.label_hist if l.lower() != text.lower()]
-        self.label_hist.append(text)
-        # 保留最近 100 条
-        if len(self.label_hist) > 100:
-            self.label_hist = self.label_hist[-100:]
+        self.store.add_label_to_history(text)
 
     def scroll_request(self, delta, orientation):
         units = - delta / (8 * 15)
@@ -1602,7 +1642,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.update_path_info()
             self._refresh_all_file_colors()
             # 缓存已失效，下次打开统计面板时重新扫描
-            self._stats_cache = None
+            self.store.stats_cache = None
             self._clear_nav_mode()
             self._build_label_index()
 
@@ -2098,32 +2138,32 @@ class MainWindow(QMainWindow, WindowMixin):
             return
 
         # 首次打开或缓存无效时执行全量扫描
-        if self._stats_cache is None:
+        if self.store.stats_cache is None:
             self.status('正在扫描标注文件…')
             from libs.labelStats import scan_label_statistics
-            self._stats_cache = scan_label_statistics(self.m_img_list, self.default_save_dir)
+            self.store.stats_cache = scan_label_statistics(self.m_img_list, self.default_save_dir)
 
-        if not self._stats_cache:
+        if not self.store.stats_cache:
             QMessageBox.information(self, '提示', '数据集中未找到标注文件。')
             return
 
         def _perform_batch_rename(old_label, new_label):
             """批量重命名回调。"""
-            images = self._stats_cache[old_label]['images']
+            images = self.store.stats_cache[old_label]['images']
             anno_paths = [resolve_annotation_path(img, self.default_save_dir)
                           for img in images]
             anno_paths = [p for p in anno_paths if p]
             modified = batch_rename_label(anno_paths, old_label, new_label)
             # 重新扫描缓存
             from libs.labelStats import scan_label_statistics
-            self._stats_cache = scan_label_statistics(self.m_img_list, self.default_save_dir)
+            self.store.stats_cache = scan_label_statistics(self.m_img_list, self.default_save_dir)
             from libs.labelStats import scan_label_to_indices
-            self._label_to_indices = scan_label_to_indices(self.m_img_list, self.default_save_dir)
+            self.store.label_to_indices = scan_label_to_indices(self.m_img_list, self.default_save_dir)
             # 如果当前图片受到影响，直接更新画布和标签列表（不 reload 文件）
             self._sync_current_after_batch(images, 'rename', old_label, new_label)
-            return True, f'已修改 {modified} 个标注文件', self._stats_cache
+            return True, f'已修改 {modified} 个标注文件', self.store.stats_cache
 
-        dialog = LabelStatsDialog(self._stats_cache, self,
+        dialog = LabelStatsDialog(self.store.stats_cache, self,
                                   on_jump_to=self.load_file,
                                   total_img_count=len(self.m_img_list),
                                   nav_labels=self._nav_labels,
@@ -2203,10 +2243,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _jump_to_first_nav_image(self):
         """跳到第一张包含任意勾选标签的图片。"""
-        if not self._nav_labels or not self._label_to_indices:
+        if not self._nav_labels or not self.store.label_to_indices:
             return
         all_indices = sorted(set().union(
-            *(self._label_to_indices.get(lbl, []) for lbl in self._nav_labels)
+            *(self.store.label_to_indices.get(lbl, []) for lbl in self._nav_labels)
         ))
         if all_indices and self.cur_img_idx not in all_indices:
             target_idx = all_indices[0]
@@ -2226,7 +2266,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # 合并所有勾选标签的索引，去重排序
         all_indices = sorted(set().union(
-            *(self._label_to_indices.get(lbl, []) for lbl in self._nav_labels)
+            *(self.store.label_to_indices.get(lbl, []) for lbl in self._nav_labels)
         ))
         if not all_indices:
             self._clear_nav_mode()
@@ -2273,27 +2313,27 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def _build_label_index(self):
         """全量扫描数据集，构建索引和缓存：_label_to_indices / _img_label_map / _stats_cache。"""
-        self._img_label_map = {}
-        self._label_to_indices = {}
+        self.store.img_label_map = {}
+        self.store.label_to_indices = {}
         stats = defaultdict(lambda: {'box_count': 0, 'image_count': 0, 'images': set()})
 
         for idx, img_path in enumerate(self.m_img_list):
             labels = scan_single_annotation(img_path, self.default_save_dir)
             if labels:
-                self._img_label_map[img_path] = labels
+                self.store.img_label_map[img_path] = labels
                 for label, count in labels.items():
-                    if label not in self._label_to_indices:
-                        self._label_to_indices[label] = []
-                    self._label_to_indices[label].append(idx)
+                    if label not in self.store.label_to_indices:
+                        self.store.label_to_indices[label] = []
+                    self.store.label_to_indices[label].append(idx)
                     stats[label]['box_count'] += count
                     stats[label]['image_count'] = len(stats[label]['images']) + 1
                     stats[label]['images'].add(img_path)
             # 处理旧标注被清空的情况：img_label_map 中无此记录
 
         # 重建 image_count（从 images set 长度）
-        self._stats_cache = {}
+        self.store.stats_cache = {}
         for label, info in stats.items():
-            self._stats_cache[label] = {
+            self.store.stats_cache[label] = {
                 'box_count': info['box_count'],
                 'image_count': len(info['images']),
                 'images': info['images'],
@@ -2315,13 +2355,13 @@ class MainWindow(QMainWindow, WindowMixin):
 
         # 扫描当前标注文件的最新状态
         new_labels = scan_single_annotation(img_path, self.default_save_dir)
-        old_labels = self._img_label_map.get(img_path, {})
+        old_labels = self.store.img_label_map.get(img_path, {})
 
         # 更新 _img_label_map
         if new_labels:
-            self._img_label_map[img_path] = new_labels
-        elif img_path in self._img_label_map:
-            del self._img_label_map[img_path]
+            self.store.img_label_map[img_path] = new_labels
+        elif img_path in self.store.img_label_map:
+            del self.store.img_label_map[img_path]
 
         # 更新 _label_to_indices
         old_label_set = set(old_labels.keys())
@@ -2329,30 +2369,30 @@ class MainWindow(QMainWindow, WindowMixin):
 
         for label in old_label_set - new_label_set:
             # 该标签不再包含此图片
-            indices = self._label_to_indices.get(label)
+            indices = self.store.label_to_indices.get(label)
             if indices and cur_idx in indices:
                 indices.remove(cur_idx)
                 if not indices:
-                    del self._label_to_indices[label]
+                    del self.store.label_to_indices[label]
 
         for label in new_label_set - old_label_set:
             # 该标签新增此图片
-            self._label_to_indices.setdefault(label, []).append(cur_idx)
-            self._label_to_indices[label].sort()
+            self.store.label_to_indices.setdefault(label, []).append(cur_idx)
+            self.store.label_to_indices[label].sort()
 
         # 更新 _stats_cache
         for label in old_label_set - new_label_set:
-            info = self._stats_cache.get(label)
+            info = self.store.stats_cache.get(label)
             if info:
                 old_count = old_labels[label]
                 info['box_count'] -= old_count
                 info['images'].discard(img_path)
                 info['image_count'] = len(info['images'])
                 if info['box_count'] <= 0 or info['image_count'] <= 0:
-                    del self._stats_cache[label]
+                    del self.store.stats_cache[label]
 
         for label in new_label_set - old_label_set:
-            info = self._stats_cache.setdefault(label, {
+            info = self.store.stats_cache.setdefault(label, {
                 'box_count': 0, 'image_count': 0, 'images': set()
             })
             count = new_labels[label]
@@ -2365,7 +2405,7 @@ class MainWindow(QMainWindow, WindowMixin):
             old_count = old_labels[label]
             new_count = new_labels[label]
             if old_count != new_count:
-                info = self._stats_cache.get(label)
+                info = self.store.stats_cache.get(label)
                 if info:
                     info['box_count'] += (new_count - old_count)
 

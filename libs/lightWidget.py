@@ -1,3 +1,8 @@
+"""亮度调节滑块控件。
+
+调节图片上方叠加遮罩的不透明度，改善暗图或过曝图的标注体验。
+"""
+
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *

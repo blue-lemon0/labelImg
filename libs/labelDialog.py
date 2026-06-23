@@ -1,3 +1,9 @@
+"""标签输入/编辑对话框。
+
+创建或编辑标注框时弹出，支持标签名输入、难度标记、以及基于历
+史记录的自动补全。
+"""
+
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *

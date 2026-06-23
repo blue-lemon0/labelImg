@@ -273,7 +273,7 @@ def build_actions(main_window):
     single_class_mode.setShortcut("Ctrl+Shift+S")
     single_class_mode.setCheckable(True)
     single_class_mode.setChecked(settings.get(SETTING_SINGLE_CLASS, False))
-    main_window.lastLabel = None
+    main_window.store.last_label = None
     # 标签显示在框上方的开关
     display_label_option = QAction(get_str('displayLabel'), main_window)
     display_label_option.setShortcut("Ctrl+Shift+P")

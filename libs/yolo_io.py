@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf8 -*-
+"""YOLO TXT 格式的读取与写入。"""
+
 import codecs
 import os
 

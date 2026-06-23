@@ -1,3 +1,9 @@
+"""应用设置键名常量表。
+
+所有通过 QSettings 持久化的键名在此集中定义，避免散落在各模
+块中的魔法字符串。
+"""
+
 SETTING_FILENAME = 'filename'
 SETTING_RECENT_FILES = 'recentFiles'
 SETTING_WIN_SIZE = 'window/size'

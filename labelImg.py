@@ -259,8 +259,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.screencast = "https://youtu.be/p0nR2YsCY_U"
 
         self.load_predefined_classes(default_prefdef_class_file)
-        self.default_label = self.label_hist[0] if self.label_hist else ""
-        if not self.label_hist:
+        self.store.default_label = self.store.label_hist[0] if self.store.label_hist else ""
+        if not self.store.label_hist:
             print("Not find:/data/predefined_classes.txt (optional)")
 
         self.image = QImage()
@@ -286,56 +286,6 @@ class MainWindow(QMainWindow, WindowMixin):
         if self.default_save_dir is None and save_dir is not None and os.path.exists(save_dir):
             self.default_save_dir = save_dir
 
-    # -- property 桥接（过渡期，逐步迁移到 self.store.xxx） --
-
-    @property
-    def label_hist(self):
-        return self.store.label_hist
-
-    @label_hist.setter
-    def label_hist(self, value):
-        self.store.label_hist = value
-
-    @property
-    def items_to_shapes(self):
-        return self.store.items_to_shapes
-
-    @items_to_shapes.setter
-    def items_to_shapes(self, value):
-        self.store.items_to_shapes = value
-
-    @property
-    def shapes_to_items(self):
-        return self.store.shapes_to_items
-
-    @shapes_to_items.setter
-    def shapes_to_items(self, value):
-        self.store.shapes_to_items = value
-
-    @property
-    def lastLabel(self):
-        return self.store.last_label
-
-    @lastLabel.setter
-    def lastLabel(self, value):
-        self.store.last_label = value
-
-    @property
-    def prev_label_text(self):
-        return self.store.prev_label_text
-
-    @prev_label_text.setter
-    def prev_label_text(self, value):
-        self.store.prev_label_text = value
-
-    @property
-    def default_label(self):
-        return self.store.default_label
-
-    @default_label.setter
-    def default_label(self, value):
-        self.store.default_label = value
-
     # ---------------------------------------------------------------------------
     # UI 构建：控件、停靠面板、画布
     # ---------------------------------------------------------------------------
@@ -344,11 +294,11 @@ class MainWindow(QMainWindow, WindowMixin):
         """创建主界面控件（标签列表、画布、停靠面板等）。"""
         get_str = lambda sid: self.string_bundle.get_string(sid)
 
-        self.label_dialog = LabelDialog(parent=self, list_item=self.label_hist)
+        self.label_dialog = LabelDialog(parent=self, list_item=self.store.label_hist)
 
-        self.items_to_shapes = {}
-        self.shapes_to_items = {}
-        self.prev_label_text = ''
+        self.store.items_to_shapes = {}
+        self.store.shapes_to_items = {}
+        self.store.prev_label_text = ''
 
         list_layout = QVBoxLayout()
         list_layout.setContentsMargins(0, 0, 0, 0)
@@ -360,8 +310,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.default_label_combo.setEditable(True)
         self.default_label_combo.setInsertPolicy(QComboBox.NoInsert)
         self.default_label_combo.setPlaceholderText("输入或选择已有标签…")
-        if self.default_label:
-            self.default_label_combo.setEditText(self.default_label)
+        if self.store.default_label:
+            self.default_label_combo.setEditText(self.store.default_label)
         self.default_label_combo.currentTextChanged.connect(self._update_default_label)
         # 下拉列表项右键菜单：从预选列表移除
         self.default_label_combo.view().setContextMenuPolicy(Qt.CustomContextMenu)
@@ -555,7 +505,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.set_dirty()
 
     def no_shapes(self):
-        return not self.items_to_shapes
+        return not self.store.items_to_shapes
 
     def toggle_advanced_mode(self, value=True):
         self._beginner = not value
@@ -655,8 +605,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self.status_manager.show(message, delay)
 
     def reset_state(self):
-        self.items_to_shapes.clear()
-        self.shapes_to_items.clear()
+        self.store.items_to_shapes.clear()
+        self.store.shapes_to_items.clear()
         self.label_list.clear()
         self.file_path = None
         self.image_data = None
@@ -986,7 +936,7 @@ class MainWindow(QMainWindow, WindowMixin):
         difficult = self.diffc_button.isChecked()
 
         try:
-            shape = self.items_to_shapes[item]
+            shape = self.store.items_to_shapes[item]
         except:
             pass
         # 同步状态
@@ -1006,7 +956,7 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             shape = self.canvas.selected_shape
             if shape:
-                self.shapes_to_items[shape].setSelected(True)
+                self.store.shapes_to_items[shape].setSelected(True)
             else:
                 self.label_list.clearSelection()
         self.actions.delete.setEnabled(selected)
@@ -1021,8 +971,8 @@ class MainWindow(QMainWindow, WindowMixin):
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
         item.setCheckState(Qt.Checked)
         item.setBackground(generate_color_by_text(shape.label))
-        self.items_to_shapes[item] = shape
-        self.shapes_to_items[shape] = item
+        self.store.items_to_shapes[item] = shape
+        self.store.shapes_to_items[shape] = item
         self.label_list.addItem(item)
         for action in self.actions.onShapesPresent:
             action.setEnabled(True)
@@ -1032,12 +982,12 @@ class MainWindow(QMainWindow, WindowMixin):
         if shape is None:
             # print('rm empty label')
             return
-        item = self.shapes_to_items.get(shape)
+        item = self.store.shapes_to_items.get(shape)
         if item is None:
             return
         self.label_list.takeItem(self.label_list.row(item))
-        del self.shapes_to_items[shape]
-        del self.items_to_shapes[item]
+        del self.store.shapes_to_items[shape]
+        del self.store.items_to_shapes[item]
         self.update_combo_box()
 
     def _validate_label_list(self):
@@ -1045,7 +995,7 @@ class MainWindow(QMainWindow, WindowMixin):
         shapes = self.canvas.shapes
         for i in range(self.label_list.count()):
             item = self.label_list.item(i)
-            shape = self.items_to_shapes.get(item)
+            shape = self.store.items_to_shapes.get(item)
             if shape is None or shape not in shapes:
                 item.setForeground(QColor(Qt.red))
             else:
@@ -1118,7 +1068,7 @@ class MainWindow(QMainWindow, WindowMixin):
             handler = get_handler(self.label_file_format)
             annotation_file_path = handler.save(
                 self.label_file, annotation_file_path, shapes,
-                self.file_path, self.image_data, self.label_hist,
+                self.file_path, self.image_data, self.store.label_hist,
                 self.line_color.getRgb(), self.fill_color.getRgb())
             print('Image:{0} -> Annotation:{1}'.format(self.file_path, annotation_file_path))
             return True
@@ -1146,7 +1096,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.label_list.item(i).setCheckState(2)
 
     def _update_default_label(self, text):
-        self.default_label = text
+        self.store.default_label = text
 
     def _refresh_default_label_combo(self):
         """刷新下拉列表候选。"""
@@ -1181,13 +1131,13 @@ class MainWindow(QMainWindow, WindowMixin):
         item = self.current_item()
         if item and self.canvas.editing():
             self._no_selection_slot = True
-            self.canvas.select_shape(self.items_to_shapes[item])
-            shape = self.items_to_shapes[item]
+            self.canvas.select_shape(self.store.items_to_shapes[item])
+            shape = self.store.items_to_shapes[item]
             # Chris 添加：difficult 标记
             self.diffc_button.setChecked(shape.difficult)
 
     def label_item_changed(self, item):
-        shape = self.items_to_shapes[item]
+        shape = self.store.items_to_shapes[item]
         label = item.text()
         if label != shape.label:
             shape.label = item.text()
@@ -1207,7 +1157,7 @@ class MainWindow(QMainWindow, WindowMixin):
             #          + 最近 10 个尚未保存过的新标签（方便新建时选用）
             annotation_labels = sorted(self.store.label_to_indices.keys())
             recent_unsaved = []
-            for label in reversed(self.label_hist):
+            for label in reversed(self.store.label_hist):
                 if label not in annotation_labels:
                     recent_unsaved.append(label)
                     if len(recent_unsaved) >= 10:
@@ -1217,18 +1167,18 @@ class MainWindow(QMainWindow, WindowMixin):
                 parent=self, list_item=all_labels)
 
             # 单类别模式（PR#106）
-            if self.single_class_mode.isChecked() and self.lastLabel:
-                text = self.lastLabel
+            if self.single_class_mode.isChecked() and self.store.last_label:
+                text = self.store.last_label
             else:
-                text = self.label_dialog.pop_up(text=self.prev_label_text)
-                self.lastLabel = text
+                text = self.label_dialog.pop_up(text=self.store.prev_label_text)
+                self.store.last_label = text
         else:
             text = self.default_label_combo.currentText()
 
         # Chris 添加：difficult 标记
         self.diffc_button.setChecked(False)
         if text is not None:
-            self.prev_label_text = text
+            self.store.prev_label_text = text
             generate_color = generate_color_by_text(text)
             shape = self.canvas.set_last_label(text, generate_color, generate_color)
             self.add_label(shape)
@@ -1347,7 +1297,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self._saved_scroll_v = self.scroll_bars[Qt.Vertical].value()
 
     def toggle_polygons(self, value):
-        for item, shape in self.items_to_shapes.items():
+        for item, shape in self.store.items_to_shapes.items():
             item.setCheckState(Qt.Checked if value else Qt.Unchecked)
 
     def load_file(self, file_path=None):
@@ -2004,10 +1954,10 @@ class MainWindow(QMainWindow, WindowMixin):
             with codecs.open(predef_classes_file, 'r', 'utf8') as f:
                 for line in f:
                     line = line.strip()
-                    if self.label_hist is None:
-                        self.label_hist = [line]
+                    if self.store.label_hist is None:
+                        self.store.label_hist = [line]
                     else:
-                        self.label_hist.append(line)
+                        self.store.label_hist.append(line)
 
     def load_annotation_file(self, anno_path, replace=True):
         """自动检测格式并加载标注文件。"""
@@ -2049,8 +1999,8 @@ class MainWindow(QMainWindow, WindowMixin):
             return
         saved = self._undo_stack.pop()
         self.label_list.clear()
-        self.items_to_shapes.clear()
-        self.shapes_to_items.clear()
+        self.store.items_to_shapes.clear()
+        self.store.shapes_to_items.clear()
         self.canvas.shapes.clear()
         self.load_labels(saved, replace=True)
         self.canvas.repaint()
@@ -2150,7 +2100,7 @@ class MainWindow(QMainWindow, WindowMixin):
         for shape in self.canvas.shapes:
             if shape.label == old_label:
                 shape.label = new_label
-                item = self.shapes_to_items.get(shape)
+                item = self.store.shapes_to_items.get(shape)
                 if item:
                     item.setText(new_label)
                 renamed += 1

@@ -1,3 +1,9 @@
+"""工具栏组件。
+
+包含格式切换下拉框和标签输入补全框，在 MainWindow 中作为
+_toolbar 使用。
+"""
+
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *

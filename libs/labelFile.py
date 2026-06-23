@@ -1,5 +1,10 @@
 # Copyright (c) 2016 Tzutalin
 # Create by TzuTaLin <tzu.ta.lin@gmail.com>
+"""LabelFile 封装 — 单张图片的标注文件加载/保存。
+
+维护标注文件路径、LabelFileFormat 枚举，以及是否已加载标注的
+状态标记。与 AnnotationStore 配合，专注于文件 I/O 而非数据管理。
+"""
 
 from PyQt5.QtGui import QImage
 

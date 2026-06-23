@@ -1,3 +1,9 @@
+"""键盘长按指数加速器。
+
+监控方向键（↑↓←→）的持续按下时间，随时间增长增大每 tick
+的像素步长，兼顾精调与快速移动。
+"""
+
 import math
 from PyQt5.QtCore import QElapsedTimer
 

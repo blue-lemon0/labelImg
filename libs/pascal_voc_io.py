@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf8 -*-
+"""Pascal VOC XML 格式的读取与写入。"""
+
 import sys
 from xml.etree import ElementTree
 from xml.etree.ElementTree import Element, SubElement

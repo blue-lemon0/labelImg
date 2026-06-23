@@ -1,6 +1,11 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+"""标注框数据模型。
 
+表示单个矩形标注框的位置、标签、颜色、顶点编辑状态，以及序列
+化/反序列化方法。Shape 实例是 AnnotationStore 和 Canvas 之间
+的核心数据载体。
+"""
 
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *

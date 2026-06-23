@@ -1,4 +1,10 @@
 
+"""标注画布组件。
+
+提供图片渲染（缩放/平移/亮度叠加）、矩形框及多边形标注的绘
+制与交互编辑。通过信号（zoomRequest/lightRequest/scrollRequest
+等）与 MainWindow 解耦通信。
+"""
 
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *

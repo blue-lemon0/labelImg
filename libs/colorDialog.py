@@ -1,3 +1,8 @@
+"""颜色选择对话框封装。
+
+提供预设颜色集和按钮，方便在标注过程中快速切换框线/填充颜色。
+"""
+
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import QColorDialog, QDialogButtonBox

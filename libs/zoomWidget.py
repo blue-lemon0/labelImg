@@ -1,3 +1,8 @@
+"""缩放比例滑块控件。
+
+显示当前缩放百分比并允许滑动调节，与 canvas 配合实现图片缩放。
+"""
+
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *

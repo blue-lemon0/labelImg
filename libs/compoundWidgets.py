@@ -1,3 +1,8 @@
+"""复合控件集合。
+
+提供 ZoomWidget + SpinBox 组合、亮度滚动条等界面小组件。
+"""
+
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtWidgets import *
 

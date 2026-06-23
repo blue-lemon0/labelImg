@@ -1,3 +1,9 @@
+"""简易设置持久化层。
+
+基于 pickle 的键值对存储，用于保存窗口位置、最近文件列表等应
+用偏好。接口兼容 QSettings 风格（set/keys/get）。
+"""
+
 import os
 import pickle
 

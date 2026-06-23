@@ -1,3 +1,9 @@
+"""通用工具函数集合。
+
+包括新图标生成、标签名校验器、缩略图生成、颜色字符串解析等各
+模块共享的小工具。
+"""
+
 from math import sqrt
 from libs.ustr import ustr
 import hashlib

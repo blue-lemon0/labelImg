@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf8 -*-
+"""CreateML JSON 格式的读取与写入。"""
+
 import json
 from pathlib import Path
 

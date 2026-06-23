@@ -173,9 +173,8 @@ class MainWindow(QMainWindow, WindowMixin):
         # 加载预设类别到列表
         self.load_predefined_classes(default_prefdef_class_file)
 
-        if self.label_hist:
-            self.default_label = self.label_hist[0]
-        else:
+        self.default_label = self.label_hist[0] if self.label_hist else ""
+        if not self.label_hist:
             print("Not find:/data/predefined_classes.txt (optional)")
 
         # ---- 左侧 QSplitter（在 _setup_ui_widgets 之前创建，scroll 直接进 splitter） ----
@@ -187,6 +186,8 @@ class MainWindow(QMainWindow, WindowMixin):
         self._left_splitter.addWidget(self._left_placeholder)   # 左：占位
 
         self._setup_ui_widgets()
+        # 首次填充预设标签下拉列表（从 predefined_classes / 历史标签）
+        self._refresh_default_label_combo()
 
         # 侧边栏自动折叠 + 边缘唤醒（独立，零耦合）
         self._side_mgr = AutoCollapseDockManager(self)
@@ -321,17 +322,25 @@ class MainWindow(QMainWindow, WindowMixin):
         list_layout = QVBoxLayout()
         list_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 默认标签控件：复选框 + 输入框
+        # 默认标签控件：复选框 + 可编辑下拉框（支持键入新标签或从已有标签选择）
         self.use_default_label_checkbox = QCheckBox(get_str('useDefaultLabel'))
         self.use_default_label_checkbox.setChecked(False)
-        self.default_label_text_line = QLineEdit()
-        self.default_label_text_line.setText(self.default_label if self.label_hist else "")
-        self.default_label_text_line.textChanged.connect(self._update_default_label)
+        self.default_label_combo = QComboBox()
+        self.default_label_combo.setEditable(True)
+        self.default_label_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.default_label_combo.setPlaceholderText("输入或选择已有标签…")
+        if self.default_label:
+            self.default_label_combo.setEditText(self.default_label)
+        self.default_label_combo.currentTextChanged.connect(self._update_default_label)
+        # 下拉列表项右键菜单：从预选列表移除
+        self.default_label_combo.view().setContextMenuPolicy(Qt.CustomContextMenu)
+        self.default_label_combo.view().customContextMenuRequested.connect(
+            self._show_dropdown_context_menu)
 
         use_default_label_qhbox_layout = QHBoxLayout()
         use_default_label_qhbox_layout.setContentsMargins(0, 0, 0, 0)
         use_default_label_qhbox_layout.addWidget(self.use_default_label_checkbox)
-        use_default_label_qhbox_layout.addWidget(self.default_label_text_line)
+        use_default_label_qhbox_layout.addWidget(self.default_label_combo)
         use_default_label_container = QWidget()
         use_default_label_container.setLayout(use_default_label_qhbox_layout)
 
@@ -1369,6 +1378,8 @@ class MainWindow(QMainWindow, WindowMixin):
         unique_text_list.sort()
 
         self.combo_box.update_items(unique_text_list)
+        # 同步刷新预设标签下拉框的候选列表
+        self._refresh_default_label_combo()
 
     def save_labels(self, annotation_file_path):
         annotation_file_path = ustr(annotation_file_path)
@@ -1433,6 +1444,38 @@ class MainWindow(QMainWindow, WindowMixin):
     def _update_default_label(self, text):
         self.default_label = text
 
+    def _refresh_default_label_combo(self):
+        """用 _label_to_indices + label_hist 里的候选标签刷新下拉列表。"""
+        current = self.default_label_combo.currentText()
+        labels = set()
+        labels.update(self._label_to_indices.keys())
+        labels.update(self.label_hist)
+        labels.discard("")
+        self.default_label_combo.blockSignals(True)
+        self.default_label_combo.clear()
+        if labels:
+            self.default_label_combo.addItems(sorted(labels))
+        self.default_label_combo.setEditText(current)
+        self.default_label_combo.blockSignals(False)
+
+    def _show_dropdown_context_menu(self, pos):
+        """下拉列表项右键菜单：从预选列表中移除该项。"""
+        index = self.default_label_combo.view().indexAt(pos)
+        if not index.isValid():
+            return
+        text = index.data().strip()
+        if not text:
+            return
+        menu = QMenu()
+        action = menu.addAction(f'从预选列表移除「{text}」')
+        action.triggered.connect(lambda checked, t=text: self._remove_from_preset_labels(t))
+        menu.exec_(self.default_label_combo.view().viewport().mapToGlobal(pos))
+
+    def _remove_from_preset_labels(self, text):
+        """从 label_hist 移除，刷新下拉。若标签仍存在于标注中则自动保留。"""
+        self.label_hist = [l for l in self.label_hist if l.lower() != text.lower()]
+        self._refresh_default_label_combo()
+
     def label_selection_changed(self):
         item = self.current_item()
         if item and self.canvas.editing():
@@ -1458,7 +1501,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         position 必须是全局坐标。
         """
-        if not self.use_default_label_checkbox.isChecked() or not self.default_label_text_line.text():
+        if not self.use_default_label_checkbox.isChecked() or not self.default_label_combo.currentText():
             # 下拉候选：标注文件中已有的标签（删框保存后自动消失）
             #          + 最近 10 个尚未保存过的新标签（方便新建时选用）
             annotation_labels = sorted(self._label_to_indices.keys())
@@ -1479,7 +1522,7 @@ class MainWindow(QMainWindow, WindowMixin):
                 text = self.label_dialog.pop_up(text=self.prev_label_text)
                 self.lastLabel = text
         else:
-            text = self.default_label_text_line.text()
+            text = self.default_label_combo.currentText()
 
         # Chris 添加：difficult 标记
         self.diffc_button.setChecked(False)

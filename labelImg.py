@@ -132,50 +132,7 @@ class MainWindow(QMainWindow, WindowMixin):
         super(MainWindow, self).__init__()
         self.setWindowTitle(__appname__)
 
-        # 在主线程加载设置
-        self.settings = Settings()
-        self.settings.load()
-        settings = self.settings
-
-        self.os_name = platform.system()
-
-        # 加载国际化字符串
-        self.string_bundle = StringBundle.get_bundle()
-        get_str = lambda str_id: self.string_bundle.get_string(str_id)
-
-        # 默认保存为 Pascal VOC XML 格式
-        self.default_save_dir = default_save_dir
-        self.label_file_format = settings.get(SETTING_LABEL_FILE_FORMAT, LabelFileFormat.PASCAL_VOC)
-
-        # 存放目录下所有图片路径
-        self.m_img_list = []
-        self.dir_name = None
-        self.label_hist = []
-        self.last_open_dir = None
-        self.cur_img_idx = 0
-        self.img_count = len(self.m_img_list)
-
-        # 跳跃翻页
-        self._nav_labels = set()  # set[str] — 上次勾选的标签集合（持久保留）
-        self._nav_active = False  # 导航模式是否激活（由主开关 + Esc 控制）
-        self._label_to_indices = {}
-        self._img_label_map = {}  # {img_path: {label: box_count}}
-        self._stats_cache = None  # {label: {'box_count': int, 'image_count': int, 'images': set}}
-
-        # 是否需要保存
-        self.dirty = False
-        self._undo_stack = []
-
-        self._no_selection_slot = False
-        self._beginner = True
-        self.screencast = "https://youtu.be/p0nR2YsCY_U"
-
-        # 加载预设类别到列表
-        self.load_predefined_classes(default_prefdef_class_file)
-
-        self.default_label = self.label_hist[0] if self.label_hist else ""
-        if not self.label_hist:
-            print("Not find:/data/predefined_classes.txt (optional)")
+        self._init_state(default_filename, default_prefdef_class_file, default_save_dir)
 
         # ---- 左侧 QSplitter（在 _setup_ui_widgets 之前创建，scroll 直接进 splitter） ----
         self._left_placeholder = QWidget()
@@ -194,35 +151,17 @@ class MainWindow(QMainWindow, WindowMixin):
         self._side_mgr.register(self.dock)
         self._side_mgr.register(self.file_dock)
 
-        self._create_actions_and_menus()
+        self._init_actions_and_menus()
 
         self.status_manager = StatusManager(self.statusBar())
         self.status_manager.show('%s started.' % __appname__)
 
-        # 应用程序状态
-        self.image = QImage()
-        self.file_path = ustr(default_filename)
-        self.last_open_dir = None
-        self.recent_files = []
-        self.max_recent = 7
-        self.line_color = None
-        self.fill_color = None
-        self.zoom_level = 100
-        self.fit_window = False
-        self._saved_zoom = None
-        self._saved_scroll_h = 0
-        self._saved_scroll_v = 0
-        self._preserve_zoom = False
-        # Chris 添加：difficult 标记
-        self.difficult = False
+        settings = self.settings
 
-        if settings.get(SETTING_RECENT_FILES):
-            self.recent_files = settings.get(SETTING_RECENT_FILES)
-
+        # 窗口状态恢复
         size = settings.get(SETTING_WIN_SIZE, QSize(600, 500))
         position = QPoint(0, 0)
         saved_position = settings.get(SETTING_WIN_POSE, position)
-        # 修复多显示器问题
         for i in range(QApplication.desktop().screenCount()):
             if QApplication.desktop().availableGeometry(i).contains(saved_position):
                 position = saved_position
@@ -230,20 +169,13 @@ class MainWindow(QMainWindow, WindowMixin):
         self.resize(size)
         self.move(position)
 
-        save_dir = ustr(settings.get(SETTING_SAVE_DIR, None))
-        self.last_open_dir = ustr(settings.get(SETTING_LAST_OPEN_DIR, None))
-        if self.default_save_dir is None and save_dir is not None and os.path.exists(save_dir):
-            self.default_save_dir = save_dir
-
         self.update_path_info()
-
         self.restoreState(settings.get(SETTING_WIN_STATE, QByteArray()))
         if settings.get(SETTING_WIN_MAXIMIZED, False):
             self.setWindowState(self.windowState() | Qt.WindowMaximized)
         Shape.line_color = self.line_color = QColor(settings.get(SETTING_LINE_COLOR, DEFAULT_LINE_COLOR))
         Shape.fill_color = self.fill_color = QColor(settings.get(SETTING_FILL_COLOR, DEFAULT_FILL_COLOR))
         self.canvas.set_drawing_color(self.line_color)
-        # Chris 添加：difficult 标记
         Shape.difficult = self.difficult
 
         def xbool(x):
@@ -255,7 +187,6 @@ class MainWindow(QMainWindow, WindowMixin):
             self.actions.advancedMode.setChecked(True)
             self.toggle_advanced_mode()
 
-        # 动态填充最近文件菜单
         self.update_file_menu()
 
         # 加载文件可能耗时，放入队列异步执行
@@ -293,8 +224,8 @@ class MainWindow(QMainWindow, WindowMixin):
         if self._left_placeholder is not None:
             idx = self._left_splitter.indexOf(self._left_placeholder)
             self._left_splitter.insertWidget(idx, self.tools)
-            self._left_placeholder.setParent(None)   # 立即从 splitter 移除
-            self._left_placeholder.deleteLater()      # 异步删除
+            self._left_placeholder.setParent(None)
+            self._left_placeholder.deleteLater()
             self._left_placeholder = None
             self._left_splitter.setSizes([140, max(self.width() - 140, 400)])
         # 拖拽信号 + 折叠计时器
@@ -304,6 +235,63 @@ class MainWindow(QMainWindow, WindowMixin):
         self._collapse_check_timer.setSingleShot(True)
         self._collapse_check_timer.setInterval(200)
         self._collapse_check_timer.timeout.connect(self._check_left_collapse)
+
+    def _init_state(self, default_filename, default_prefdef_class_file, default_save_dir):
+        """初始化所有 self.* 状态属性（与 UI 无关）。"""
+        self.settings = Settings()
+        self.settings.load()
+        self.os_name = platform.system()
+        self.string_bundle = StringBundle.get_bundle()
+
+        self.default_save_dir = default_save_dir
+        self.label_file_format = self.settings.get(SETTING_LABEL_FILE_FORMAT, LabelFileFormat.PASCAL_VOC)
+
+        self.m_img_list = []
+        self.dir_name = None
+        self.label_hist = []
+        self.last_open_dir = None
+        self.cur_img_idx = 0
+        self.img_count = 0
+
+        self._nav_labels = set()
+        self._nav_active = False
+        self._label_to_indices = {}
+        self._img_label_map = {}
+        self._stats_cache = None
+
+        self.dirty = False
+        self._undo_stack = []
+        self._no_selection_slot = False
+        self._beginner = True
+        self.screencast = "https://youtu.be/p0nR2YsCY_U"
+
+        self.load_predefined_classes(default_prefdef_class_file)
+        self.default_label = self.label_hist[0] if self.label_hist else ""
+        if not self.label_hist:
+            print("Not find:/data/predefined_classes.txt (optional)")
+
+        self.image = QImage()
+        self.file_path = ustr(default_filename)
+        self.recent_files = []
+        self.max_recent = 7
+        self.line_color = None
+        self.fill_color = None
+        self.zoom_level = 100
+        self.fit_window = False
+        self._saved_zoom = None
+        self._saved_scroll_h = 0
+        self._saved_scroll_v = 0
+        self._preserve_zoom = False
+        self.difficult = False
+
+        if self.settings.get(SETTING_RECENT_FILES):
+            self.recent_files = self.settings.get(SETTING_RECENT_FILES)
+
+        self.last_open_dir = ustr(self.settings.get(SETTING_LAST_OPEN_DIR, None))
+
+        save_dir = ustr(self.settings.get(SETTING_SAVE_DIR, None))
+        if self.default_save_dir is None and save_dir is not None and os.path.exists(save_dir):
+            self.default_save_dir = save_dir
 
     # ---------------------------------------------------------------------------
     # UI 构建：控件、停靠面板、画布
@@ -442,315 +430,10 @@ class MainWindow(QMainWindow, WindowMixin):
     # ---------------------------------------------------------------------------
     # 创建所有 Action + 菜单栏/工具栏
     # ---------------------------------------------------------------------------
-
-    def _create_actions_and_menus(self):
+    def _init_actions_and_menus(self):
         """创建所有 Action 并组装菜单栏、工具栏、右键菜单、快捷键。"""
-        get_str = lambda sid: self.string_bundle.get_string(sid)
-        settings = self.settings
-        action = partial(new_action, self)
-
-        quit = action(get_str('quit'), self.close,
-                      'Ctrl+Q', 'quit', get_str('quitApp'))
-
-        open = action(get_str('openFile'), self.open_file,
-                      'Ctrl+O', 'open', get_str('openFileDetail'))
-
-        open_dir = action(get_str('openDir'), self.open_dir_dialog,
-                          'Ctrl+u', 'open', get_str('openDir'))
-
-        change_save_dir = action(get_str('changeSaveDir'), self.change_save_dir_dialog,
-                                 'Ctrl+r', 'open', get_str('changeSavedAnnotationDir'))
-
-        open_annotation = action(get_str('openAnnotation'), self.open_annotation_dialog,
-                                 'Ctrl+Shift+O', 'open', get_str('openAnnotationDetail'))
-        copy_prev_bounding = action(get_str('copyPrevBounding'), self.copy_previous_bounding_boxes, 'Ctrl+v', 'copy', get_str('copyPrevBounding'))
-        undo = action('撤销', self._undo, 'Ctrl+Z', 'undo', '撤销上一步操作（创建/删除/复制/粘贴）')
-
-        open_next_image = action(get_str('nextImg'), self.open_next_image,
-                                 'd', 'next', get_str('nextImgDetail'))
-
-        open_prev_image = action(get_str('prevImg'), self.open_prev_image,
-                                 'a', 'prev', get_str('prevImgDetail'))
-
-        verify = action(get_str('verifyImg'), self.verify_image,
-                        'space', 'verify', get_str('verifyImgDetail'))
-
-        save = action(get_str('save'), self.save_file,
-                      'Ctrl+S', 'save', get_str('saveDetail'), enabled=False)
-
-        def get_format_meta(format):
-            """返回 (标题, 图标名) 元组"""
-            if format == LabelFileFormat.PASCAL_VOC:
-                return '&PascalVOC', 'format_voc'
-            elif format == LabelFileFormat.YOLO:
-                return '&YOLO', 'format_yolo'
-            elif format == LabelFileFormat.CREATE_ML:
-                return '&CreateML', 'format_createml'
-
-        save_format = action(get_format_meta(self.label_file_format)[0],
-                             self.change_format, 'Ctrl+Y',
-                             get_format_meta(self.label_file_format)[1],
-                             get_str('changeSaveFormat'), enabled=True)
-
-        save_as = action(get_str('saveAs'), self.save_file_as,
-                         'Ctrl+Shift+S', 'save-as', get_str('saveAsDetail'), enabled=False)
-
-        close = action(get_str('closeCur'), self.close_file, 'Ctrl+W', 'close', get_str('closeCurDetail'))
-
-        delete_image = action(get_str('deleteImg'), self.delete_image, 'Ctrl+Shift+D', 'close', get_str('deleteImgDetail'))
-
-        reset_all = action(get_str('resetAll'), self.reset_all, None, 'resetall', get_str('resetAllDetail'))
-
-        color1 = action(get_str('boxLineColor'), self.choose_color1,
-                        'Ctrl+L', 'color_line', get_str('boxLineColorDetail'))
-
-        create_mode = action(get_str('crtBox'), self.set_create_mode,
-                             'w', 'new', get_str('crtBoxDetail'), enabled=False)
-        edit_mode = action(get_str('editBox'), self.set_edit_mode,
-                           'Ctrl+J', 'edit', get_str('editBoxDetail'), enabled=False)
-
-        create = action(get_str('crtBox'), self.create_shape,
-                        'w', 'new', get_str('crtBoxDetail'), enabled=False)
-        delete = action(get_str('delBox'), self.delete_selected_shape,
-                        'Delete', 'delete', get_str('delBoxDetail'), enabled=False)
-        copy = action(get_str('dupBox'), self.copy_selected_shape,
-                      'Ctrl+D', 'copy', get_str('dupBoxDetail'),
-                      enabled=False)
-
-        advanced_mode = action(get_str('advancedMode'), self.toggle_advanced_mode,
-                               'Ctrl+Shift+A', 'expert', get_str('advancedModeDetail'),
-                               checkable=True)
-
-        hide_all = action(get_str('hideAllBox'), partial(self.toggle_polygons, False),
-                          'Ctrl+H', 'hide', get_str('hideAllBoxDetail'),
-                          enabled=False)
-        show_all = action(get_str('showAllBox'), partial(self.toggle_polygons, True),
-                          'Ctrl+A', 'hide', get_str('showAllBoxDetail'),
-                          enabled=False)
-
-        help_default = action(get_str('tutorialDefault'), self.show_default_tutorial_dialog, None, 'help', get_str('tutorialDetail'))
-        show_info = action(get_str('info'), self.show_info_dialog, None, 'help', get_str('info'))
-        show_shortcut = action(get_str('shortcut'), self.show_shortcuts_dialog, None, 'help', get_str('shortcut'))
-
-        zoom = QWidgetAction(self)
-        self.zoom_widget.setWhatsThis(
-            u"Zoom in or out of the image. Also accessible with"
-            " %s and %s from the canvas." % (format_shortcut("Ctrl+[-+]"),
-                                             format_shortcut("Ctrl+Wheel")))
-        self.zoom_widget.setEnabled(False)
-
-        zoom_in = action(get_str('zoomin'), partial(self.add_zoom, 10),
-                         'Ctrl++', 'zoom-in', get_str('zoominDetail'), enabled=False)
-        zoom_out = action(get_str('zoomout'), partial(self.add_zoom, -10),
-                          'Ctrl+-', 'zoom-out', get_str('zoomoutDetail'), enabled=False)
-        zoom_org = action(get_str('originalsize'), partial(self.set_zoom, 100),
-                          'Ctrl+=', 'zoom', get_str('originalsizeDetail'), enabled=False)
-        fit_window = action(get_str('fitWin'), self.set_fit_window,
-                            'Ctrl+F', 'fit-window', get_str('fitWinDetail'),
-                            checkable=True, enabled=False)
-        fit_width = action(get_str('fitWidth'), self.set_fit_width,
-                           'Ctrl+Shift+F', 'fit-width', get_str('fitWidthDetail'),
-                           checkable=True, enabled=False)
-        # 将缩放控件分组，方便统一启用/禁用
-        zoom_actions = (self.zoom_widget, zoom_in, zoom_out,
-                        zoom_org, fit_window, fit_width)
-        self.zoom_mode = self.MANUAL_ZOOM
-        self.scalers = {
-            self.FIT_WINDOW: self.scale_fit_window,
-            self.FIT_WIDTH: self.scale_fit_width,
-            # 加载文件时缩放到 100%
-            self.MANUAL_ZOOM: lambda: 1,
-        }
-
-        light = QWidgetAction(self)
-        self.light_widget.setWhatsThis(
-            u"Brighten or darken current image. Also accessible with"
-            " %s and %s from the canvas." % (format_shortcut("Ctrl+Shift+[-+]"),
-                                             format_shortcut("Ctrl+Shift+Wheel")))
-        self.light_widget.setEnabled(False)
-
-        light_brighten = action(get_str('lightbrighten'), partial(self.add_light, 10),
-                                'Ctrl+Shift++', 'light_lighten', get_str('lightbrightenDetail'), enabled=False)
-        light_darken = action(get_str('lightdarken'), partial(self.add_light, -10),
-                              'Ctrl+Shift+-', 'light_darken', get_str('lightdarkenDetail'), enabled=False)
-        light_org = action(get_str('lightreset'), partial(self.set_light, 50),
-                           'Ctrl+Shift+=', 'light_reset', get_str('lightresetDetail'), enabled=False)
-
-        # 将亮度控件分组，方便统一启用/禁用
-        light_actions = (self.light_widget, light_brighten,
-                         light_darken, light_org)
-
-        # 复合控件：[-] [65] [+] 在同一行
-        self.zoom_panel = ZoomWidgetPanel(self.zoom_widget, zoom_in, zoom_out)
-        zoom_compound = QWidgetAction(self)
-        zoom_compound.setDefaultWidget(self.zoom_panel)
-        self.light_panel = LightWidgetPanel(self.light_widget, light_brighten, light_darken)
-        light_compound = QWidgetAction(self)
-        light_compound.setDefaultWidget(self.light_panel)
-
-        edit = action(get_str('editLabel'), self.edit_label,
-                      'Ctrl+E', 'edit', get_str('editLabelDetail'),
-                      enabled=False)
-        self.edit_button.setDefaultAction(edit)
-
-        shape_line_color = action(get_str('shapeLineColor'), self.choose_shape_line_color,
-                                  icon='color_line', tip=get_str('shapeLineColorDetail'),
-                                  enabled=False)
-        shape_fill_color = action(get_str('shapeFillColor'), self.choose_shape_fill_color,
-                                  icon='color', tip=get_str('shapeFillColorDetail'),
-                                  enabled=False)
-
-        labels = self.dock.toggleViewAction()
-        labels.setText(get_str('showHide'))
-        labels.setShortcut('Ctrl+Shift+L')
-
-        # 一键切换所有侧边栏（带动画）
-        toggle_side_panels = action('切换侧边栏', self._toggle_all_panels,
-                                    None, None, '显示/隐藏侧边标注与文件面板')
-
-        # 标签列表右键菜单
-        label_menu = QMenu()
-        add_actions(label_menu, (edit, delete))
-        self.label_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.label_list.customContextMenuRequested.connect(
-            self.pop_label_list_menu)
-
-        # 绘制正方形/矩形切换
-        self.draw_squares_option = QAction(get_str('drawSquares'), self)
-        self.draw_squares_option.setShortcut('Ctrl+Shift+R')
-        self.draw_squares_option.setCheckable(True)
-        self.draw_squares_option.setChecked(settings.get(SETTING_DRAW_SQUARE, False))
-        self.draw_squares_option.setToolTip('切换后画框始终约束为正方形；'
-                                            '不开启时也可按住 Ctrl 拖拽临时约束')
-        self.draw_squares_option.triggered.connect(self.toggle_draw_square)
-
-        # 绘制复选框图标（工具栏上用，菜单已有原生勾选）
-        def _checkbox_icon(checked):
-            pixmap = QPixmap(20, 20)
-            pixmap.fill(Qt.transparent)
-            p = QPainter(pixmap)
-            p.setRenderHint(QPainter.Antialiasing)
-            rect = QRectF(2, 2, 16, 16)
-            p.setPen(QPen(QColor('#555'), 1.5))
-            p.setBrush(QColor('#fff'))
-            p.drawRoundedRect(rect, 2, 2)
-            if checked:
-                p.setPen(QPen(QColor('#2b7'), 2.5))
-                p.drawLine(QPointF(5, 10), QPointF(9, 14))
-                p.drawLine(QPointF(9, 14), QPointF(15, 6))
-            p.end()
-            return QIcon(pixmap)
-
-        # 记住缩放位置
-        checked = settings.get(SETTING_REMEMBER_ZOOM, False)
-        self.remember_zoom_action = QAction(_checkbox_icon(checked), '记住缩放位置', self)
-        self.remember_zoom_action.setCheckable(True)
-        self.remember_zoom_action.setChecked(checked)
-        self.remember_zoom_action.setToolTip('开启后，A/D 翻页时自动保持上一张的缩放和滚动位置')
-        self.remember_zoom_action.toggled.connect(
-            lambda c: self.remember_zoom_action.setIcon(_checkbox_icon(c)))
-
-        # 存储所有 Action 便于后续统一管理
-        self.actions = Struct(save=save, save_format=save_format, saveAs=save_as, open=open, close=close, resetAll=reset_all, deleteImg=delete_image,
-                              lineColor=color1, create=create, delete=delete, edit=edit, copy=copy, undo=undo,
-                              createMode=create_mode, editMode=edit_mode, advancedMode=advanced_mode,
-                              shapeLineColor=shape_line_color, shapeFillColor=shape_fill_color,
-                              zoom=zoom, zoomIn=zoom_in, zoomOut=zoom_out, zoomOrg=zoom_org,
-                              fitWindow=fit_window, fitWidth=fit_width,
-                              zoomActions=zoom_actions,
-                              lightBrighten=light_brighten, lightDarken=light_darken, lightOrg=light_org,
-                              lightActions=light_actions,
-                              fileMenuActions=(
-                                  open, open_dir, save, save_as, close, reset_all, quit),
-                              beginner=(), advanced=(),
-                              editMenu=(undo, edit, copy, delete,
-                                        None, color1, self.draw_squares_option),
-                              beginnerContext=(create, edit, copy, delete),
-                              advancedContext=(create_mode, edit_mode, edit, copy,
-                                               delete, shape_line_color, shape_fill_color),
-                              onLoadActive=(
-                                  close, create, create_mode, edit_mode),
-                              onShapesPresent=(save_as, hide_all, show_all))
-
-        self.menus = Struct(
-            file=self.menu(get_str('menu_file')),
-            edit=self.menu(get_str('menu_edit')),
-            view=self.menu(get_str('menu_view')),
-            help=self.menu(get_str('menu_help')),
-            recentFiles=QMenu(get_str('menu_openRecent')),
-            labelList=label_menu)
-
-        # 自动保存：翻页时自动保存标注
-        self.auto_saving = QAction(get_str('autoSaveMode'), self)
-        self.auto_saving.setCheckable(True)
-        self.auto_saving.setChecked(settings.get(SETTING_AUTO_SAVE, False))
-        # 单类别模式（PR#106）
-        self.single_class_mode = QAction(get_str('singleClsMode'), self)
-        self.single_class_mode.setShortcut("Ctrl+Shift+S")
-        self.single_class_mode.setCheckable(True)
-        self.single_class_mode.setChecked(settings.get(SETTING_SINGLE_CLASS, False))
-        self.lastLabel = None
-        # 标签显示在框上方的开关
-        self.display_label_option = QAction(get_str('displayLabel'), self)
-        self.display_label_option.setShortcut("Ctrl+Shift+P")
-        self.display_label_option.setCheckable(True)
-        self.display_label_option.setChecked(settings.get(SETTING_PAINT_LABEL, False))
-        self.display_label_option.triggered.connect(self.toggle_paint_labels_option)
-
-        add_actions(self.menus.file,
-                    (open, open_dir, change_save_dir, open_annotation, copy_prev_bounding, self.menus.recentFiles, save, save_format, save_as, close, reset_all, delete_image, quit))
-        add_actions(self.menus.help, (help_default, show_info, show_shortcut))
-
-        # 标签统计 — 独立菜单栏项，放在帮助后面
-        label_stats_action = action('标签统计', self.show_label_stats,
-                                    'Ctrl+T', None, '统计当前数据集中的标签分布')
-        self.menuBar().addAction(label_stats_action)
-
-        # 格式转换 — 独立菜单栏项
-        convert_action = action('格式转换', self.show_convert_dialog,
-                                None, None, '批量转换标注文件格式')
-        self.menuBar().addAction(convert_action)
-
-        # 删除标注文件 — 独立菜单栏项
-        clean_action = action('删除标注文件', self.show_clean_dialog,
-                              None, None, '批量删除标注文件（清理已转换的原文件）')
-        self.menuBar().addAction(clean_action)
-
-        add_actions(self.menus.view, (
-            self.auto_saving,
-            self.single_class_mode,
-            self.display_label_option,
-            labels, toggle_side_panels, advanced_mode, None,
-            hide_all, show_all, None,
-            zoom_in, zoom_out, zoom_org, None,
-            self.remember_zoom_action,
-            fit_window, fit_width, None,
-            light_brighten, light_darken, light_org))
-
-        self.menus.file.aboutToShow.connect(self.update_file_menu)
-
-        # 画布自定义右键菜单
-        add_actions(self.canvas.menus[0], self.actions.beginnerContext)
-        add_actions(self.canvas.menus[1], (
-            action('&Copy here', self.copy_shape),
-            action('&Move here', self.move_shape)))
-
-        self.actions.beginner = (
-            open, open_dir, change_save_dir, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
-            zoom_compound, None,
-            self.remember_zoom_action,
-            fit_window, fit_width, None,
-            light_compound, light_org)
-
-        self.actions.advanced = (
-            open, open_dir, change_save_dir, open_next_image, open_prev_image, save, save_format, None,
-            create_mode, edit_mode, None,
-            hide_all, show_all, None,
-            self.remember_zoom_action)
-
-        self.tools = self.toolbar('Tools')
-        self.tools.setOrientation(Qt.Vertical)
-        # dock 包装在 init 末尾（restoreState 之后）进行，避免被覆盖
+        from libs.actionBuilder import build_actions
+        self.actions, self.menus, self.tools = build_actions(self)
 
     def eventFilter(self, obj, event):
         """在子控件（如 QListWidget、Canvas）消费前拦截快捷键。

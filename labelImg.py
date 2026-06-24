@@ -1318,6 +1318,28 @@ class MainWindow(QMainWindow, WindowMixin):
         for item, shape in self.store.items_to_shapes.items():
             item.setCheckState(Qt.Checked if value else Qt.Unchecked)
 
+    def _resolve_load_path(self, file_path):
+        """解析加载路径：缺省时从 settings 读取，确保为绝对路径。"""
+        if file_path is None:
+            file_path = self.settings.get(SETTING_FILENAME)
+        path = os.path.abspath(ustr(file_path))
+        return path if path else None
+
+    def _highlight_file_in_list(self, file_path):
+        """在文件列表中高亮当前图片并滚动到可见区域。"""
+        if not file_path or self.file_list_widget.count() == 0:
+            return
+        if file_path in self.m_img_list:
+            index = self.m_img_list.index(file_path)
+            self.cur_img_idx = index
+            self.img_count = len(self.m_img_list)
+            item = self.file_list_widget.item(index)
+            item.setSelected(True)
+            self.file_list_widget.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+        else:
+            self.file_list_widget.clear()
+            self.m_img_list.clear()
+
     def load_file(self, file_path=None):
         """加载指定文件，若为 None 则加载上次打开的文件。"""
         # 捕获保存的缩放/滚动状态后立即清空，避免非翻页路径误用
@@ -1329,48 +1351,30 @@ class MainWindow(QMainWindow, WindowMixin):
         self._saved_zoom = None
         self.reset_state()
         self.canvas.setEnabled(False)
-        if file_path is None:
-            file_path = self.settings.get(SETTING_FILENAME)
-        # 确保 filePath 是普通 Python 字符串，而非 QString
-        file_path = ustr(file_path)
+        file_path = self._resolve_load_path(file_path)
+        if not file_path:
+            self.canvas.setEnabled(True)
+            return False
+        self._highlight_file_in_list(file_path)
 
-        # 修复：选择目录后打开新文件时的索引错误
-        unicode_file_path = ustr(file_path)
-        unicode_file_path = os.path.abspath(unicode_file_path)
-        # Tzutalin 20160906：文件列表，双击切换图片
-        # 高亮当前图片并滚动到可见区域
-        if unicode_file_path and self.file_list_widget.count() > 0:
-            if unicode_file_path in self.m_img_list:
-                index = self.m_img_list.index(unicode_file_path)
-                self.cur_img_idx = index
-                self.img_count = len(self.m_img_list)
-                file_widget_item = self.file_list_widget.item(index)
-                file_widget_item.setSelected(True)
-                self.file_list_widget.scrollToItem(file_widget_item, QAbstractItemView.PositionAtCenter)
-            else:
-                self.file_list_widget.clear()
-                self.m_img_list.clear()
-
-        if unicode_file_path and os.path.exists(unicode_file_path):
-            if LabelFile.is_label_file(unicode_file_path):
+        if os.path.exists(file_path):
+            if LabelFile.is_label_file(file_path):
                 try:
-                    self.label_file = LabelFile(unicode_file_path)
+                    self.label_file = LabelFile(file_path)
                 except LabelFileError as e:
                     self.error_message(u'Error opening file',
                                        (u"<p><b>%s</b></p>"
                                         u"<p>Make sure <i>%s</i> is a valid label file.")
-                                       % (e, unicode_file_path))
-                    self.status("Error reading %s" % unicode_file_path)
-                    
+                                       % (e, file_path))
+                    self.status("Error reading %s" % file_path)
                     return False
                 self.image_data = self.label_file.image_data
                 self.line_color = QColor(*self.label_file.lineColor)
                 self.fill_color = QColor(*self.label_file.fillColor)
                 self.canvas.verified = self.label_file.verified
             else:
-                # 加载图片：
-                # 先读取数据，保存到标注文件时使用
-                self.image_data = read(unicode_file_path, None)
+                # 加载图片：先读取数据，保存到标注文件时使用
+                self.image_data = read(file_path, None)
                 self.label_file = None
                 self.canvas.verified = False
 
@@ -1380,12 +1384,12 @@ class MainWindow(QMainWindow, WindowMixin):
                 image = QImage.fromData(self.image_data)
             if image.isNull():
                 self.error_message(u'Error opening file',
-                                   u"<p>Make sure <i>%s</i> is a valid image file." % unicode_file_path)
-                self.status("Error reading %s" % unicode_file_path)
+                                   u"<p>Make sure <i>%s</i> is a valid image file." % file_path)
+                self.status("Error reading %s" % file_path)
                 return False
-            self.status("Loaded %s" % os.path.basename(unicode_file_path))
+            self.status("Loaded %s" % os.path.basename(file_path))
             self.image = image
-            self.file_path = unicode_file_path
+            self.file_path = file_path
             if _preserve:
                 self.canvas.pixmap = QPixmap.fromImage(image)
                 self.canvas.scale = 0.01 * _saved_zoom
@@ -2159,22 +2163,18 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.load_file(filename)
                 self._update_title_counter()
 
-    def _advance_in_nav(self, direction):
-        """在跳跃翻页中前进 (direction=+1) 或后退 (direction=-1)。
-        计算所有勾选标签的图片索引并集，用 bisect 定位目标位置。
-        """
-        if not self._nav_labels:
-            self._clear_nav_mode()
-            return
-
-        # 合并所有勾选标签的索引，去重排序
-        all_indices = sorted(set().union(
+    def _merge_nav_indices(self):
+        """合并所有勾选标签的图片索引，去重排序。"""
+        return sorted(set().union(
             *(self.store.label_to_indices.get(lbl, []) for lbl in self._nav_labels)
         ))
-        if not all_indices:
-            self._clear_nav_mode()
-            self.status('所选标签均无匹配图片', 3000)
-            return
+
+    def _find_nav_target(self, direction):
+        """用 bisect 定位目标索引。返回 (target_idx, total) 或 (None, 0)。"""
+        all_indices = self._merge_nav_indices()
+        total = len(all_indices)
+        if total == 0:
+            return None, 0
 
         cur = self.cur_img_idx
         import bisect
@@ -2182,25 +2182,32 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if direction > 0:
             next_pos = pos
-            while next_pos < len(all_indices) and all_indices[next_pos] <= cur:
+            while next_pos < total and all_indices[next_pos] <= cur:
                 next_pos += 1
-            if next_pos < len(all_indices):
-                target_idx = all_indices[next_pos]
-            else:
-                target_idx = all_indices[0]
+            return (all_indices[next_pos] if next_pos < total else all_indices[0]), total
         else:
             prev_pos = pos - 1
             while prev_pos >= 0 and all_indices[prev_pos] >= cur:
                 prev_pos -= 1
-            if prev_pos >= 0:
-                target_idx = all_indices[prev_pos]
-            else:
-                target_idx = all_indices[-1]
+            return (all_indices[prev_pos] if prev_pos >= 0 else all_indices[-1]), total
+
+    def _advance_in_nav(self, direction):
+        """在跳跃翻页中前进 (direction=+1) 或后退 (direction=-1)。"""
+        if not self._nav_labels:
+            self._clear_nav_mode()
+            return
+
+        target_idx, total = self._find_nav_target(direction)
+        if target_idx is None:
+            self._clear_nav_mode()
+            self.status('所选标签均无匹配图片', 3000)
+            return
 
         if self.file_path is not None and self.remember_zoom_action.isChecked():
             self._save_zoom_scroll()
             self._preserve_zoom = True
 
+        cur = self.cur_img_idx
         if target_idx != cur:
             self.cur_img_idx = target_idx
             filename = self.m_img_list[self.cur_img_idx]
@@ -2208,7 +2215,6 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.load_file(filename)
                 self._update_title_counter()
         else:
-            total = len(all_indices)
             if total == 1:
                 self.status('所选标签仅此 1 张图片，无法翻页', 3000)
             else:
